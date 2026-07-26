@@ -1,0 +1,7 @@
+recording.db
+recording.db-wal
+recording.db-shm
+captures/
+*.png
+__pycache__/
+.vscode/
