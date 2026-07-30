@@ -6,8 +6,8 @@ import io
 IMAGE_PATH = r"D:\python_files\Mimic Agent\captures\click_1785120433.083.png"
 
 # pretend this is the click location from your database (pick a real spot on that screenshot)
-CLICK_X = 900
-CLICK_Y = 500
+CLICK_X = 965
+CLICK_Y = 598
 
 def crop_around_click(path, cx, cy, box=500):
     """Crop a box x box region centered on the click point, return PNG bytes."""
