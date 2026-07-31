@@ -8,7 +8,7 @@ Merges all five exercises:
   Ex4 SQLite (WAL)            -> persist everything durably
   Ex5 queue + writer thread   -> keep the mouse smooth (producer/consumer)
 
-Architecture (say it out loud):
+Architecture (say it out loud):bihi
   listeners catch events -> queue passes them safely ->
   writer thread saves events + screenshots + UI-element info into SQLite.
 """
