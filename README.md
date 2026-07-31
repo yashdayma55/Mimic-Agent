@@ -30,7 +30,7 @@ flowchart TB
 
     DB[("SQLite - WAL mode<br/>events - screenshots - plans - corrections<br/>the single source of truth")]:::db
 
-    subgraph BRAIN["Local Vision Model - Ollama + Qwen2.5-VL - fully offline"]
+    subgraph BRAIN["Local Vision Model - Ollama + Qwen3-VL - fully offline"]
         direction LR
         B1["summarize<br/>the recording"]:::ai
         B2["find element<br/>by sight (fallback)"]:::ai
@@ -87,11 +87,21 @@ flowchart TB
     style BRAIN fill:#f6f3fc,stroke:#7e57c2,stroke-width:2px
 ```
 
-The green Learn block is four listeners running at once while you work. Everything they see flows into the SQLite database in the middle, which is the single place the whole system reads from and writes to. Once you stop recording, the yellow Distill block reads the raw events back out, asks the local vision model to turn clusters of clicks into clean readable steps, and produces two forms of the same workflow: notes you can edit, and a graph the executor can run. You get to review and edit those notes before anything runs. The blue Replay block then walks the graph one step at a time, finding each target, highlighting it, waiting for your approval, acting, and checking the screen actually changed before moving on. The red Correct block is where your feedback rewrites a step and gets saved into memory, so the resume picks up from the fixed step and the lesson is remembered next time. The purple block at the bottom is the local vision model, and the dotted lines show it is only pulled in for three specific jobs rather than running constantly.
+The green Learn block is four listeners running at once while you work. Everything they see flows into the SQLite database in the middle, which is the single place the whole system reads from and writes to. Once you stop recording, the yellow Distill block reads the raw events back out, groups clusters of clicks into clean readable steps, and produces two forms of the same workflow: notes you can edit, and a structured plan the executor can run. You get to review and edit those notes before anything runs. The blue Replay block then walks the plan one step at a time, finding each target, highlighting it, waiting for your approval, acting, and checking the screen actually changed before moving on. The red Correct block is where your feedback rewrites a step and gets saved into memory, so the resume picks up from the fixed step and the lesson is remembered next time. The purple block is the local vision model, and the dotted lines show it is only pulled in for three specific jobs rather than running constantly.
 
 ## Where the project is right now
 
-Phase 1, the recorder, is finished and working. Everything downstream reads from the database it produces, so getting this layer solid was the priority before building anything on top of it.
+Three phases are built and working, in order.
+
+- **Phase 1 - Recorder** (done): captures any workflow to a local database.
+- **Phase 2 - Local vision** (done): understands screenshots offline and identifies UI elements as structured data.
+- **Phase 3 - Distillation** (done): turns a raw recording into a readable, editable, security-conscious plan.
+
+So today MimicAgent can already **watch** a task, **understand** what is on screen, and **plan** the workflow as clean steps. What remains is the replay engine that executes the plan, the correction loop that learns from feedback, and packaging. Those are described in the roadmap at the end.
+
+Each finished phase is walked through in detail below.
+
+---
 
 ## Phase 1 in detail: the recorder
 
@@ -155,25 +165,160 @@ When you press Escape to stop, the result is recording.db: your entire workflow 
 
 The one sentence summary worth remembering: listeners catch events, a queue passes them safely to a writer thread, and the writer thread saves the events, screenshots, and interface information into SQLite.
 
-### What a real capture looks like
+**What a real capture looks like.** In one test run the recorder watched me open a recruiter's LinkedIn profile, click the Apollo extension to find their email, switch over to Gmail, hit Compose, and paste into the recipient field. Every one of those actions came back out of the database afterward with a timestamp, the name of the element I touched, and a screenshot, and my mouse never lagged once through the whole thing. That is the moment the project stopped being an idea and started being real.
 
-In one test run the recorder watched me open a recruiter's LinkedIn profile, click the Apollo extension to find their email, switch over to Gmail, hit Compose, and paste into the recipient field. Every one of those actions came back out of the database afterward with a timestamp, the name of the element I touched, and a screenshot, and my mouse never lagged once through the whole thing. That is the moment the project stopped being an idea and started being real.
+---
+
+## Phase 2 in detail: local vision
+
+Phase 1 gave the agent a memory of what happened, but a screenshot is just pixels. Phase 2 gives the agent eyes: a vision model that runs entirely on your own machine and can look at a screenshot and say what a UI element is, returning the answer as structured data the rest of the agent can act on. Everything here is local, so no screen data ever leaves the machine.
+
+```mermaid
+flowchart TB
+    IN(["A screenshot from the recording<br/>(just pixels, no meaning yet)"]):::start
+
+    subgraph PREP["1 - PREPARE THE IMAGE (make it cheap to process)"]
+        direction TB
+        CROP["Crop to the region<br/>around the click point<br/><i>far fewer pixels = far faster</i>"]:::tool
+        RESIZE["Downscale if still large<br/><i>fewer visual tokens</i>"]:::tool
+        CROP --> RESIZE
+    end
+
+    subgraph MODEL["2 - LOCAL VISION MODEL (Ollama, fully offline)"]
+        direction TB
+        WARM["Keep model warm in RAM<br/><i>cold-load is the real cost,<br/>not the image</i>"]:::ai
+        ASK["Ask qwen3-vl:2b:<br/>what UI element is this?<br/><i>think=False for speed</i>"]:::ai
+        WARM --> ASK
+    end
+
+    subgraph OUT["3 - STRUCTURED ANSWER (data, not prose)"]
+        direction TB
+        JSON["Model returns JSON in the text<br/>element_type / label / confidence"]:::good
+        PARSE["Parse from first { to last }<br/><i>tolerant of stray text</i>"]:::good
+        JSON --> PARSE
+    end
+
+    RESULT(["Usable data:<br/>{element_type: textbox,<br/>label: Write a message,<br/>confidence: high}"]):::start
+
+    IN --> CROP
+    RESIZE --> WARM
+    ASK --> JSON
+    PARSE --> RESULT
+
+    classDef start fill:#311b92,color:#fff,stroke:#1a0f5c,stroke-width:2px
+    classDef tool fill:#e3f2fd,color:#1a3a5c,stroke:#5b9bd5,stroke-width:1.5px
+    classDef ai fill:#ede7f6,color:#311b92,stroke:#7e57c2,stroke-width:1.5px
+    classDef good fill:#e8f5e9,color:#1b5e20,stroke:#66bb6a,stroke-width:1.5px
+
+    style PREP fill:#f3f9ff,stroke:#5b9bd5,stroke-width:2px
+    style MODEL fill:#f6f3fc,stroke:#7e57c2,stroke-width:2px
+    style OUT fill:#f1f8f2,stroke:#66bb6a,stroke-width:2px
+```
+
+The model I settled on is Qwen3-VL at the 2B size, served locally by Ollama. On a 16GB laptop with no GPU, the larger 8B model took around half an hour for a single screenshot, which is unusable, while the 2B model handles the same work in seconds once it is warm. That trade, a smaller model that fits the hardware, is the whole reason the offline promise holds.
+
+The biggest lesson of this phase was where the time actually goes. I assumed the image size or the inference itself was the cost, but it turned out the dominant cost was cold-loading the model from disk into memory. Once the model is warm in RAM, a cropped screenshot comes back in single-digit to low-double-digit seconds; cold, it takes minutes. So the first stage of the diagram, preparing the image by cropping to the region around the click, matters less for raw speed than keeping the model warm, though cropping still helps by cutting the number of visual tokens the model has to chew through. On a machine this tight, warmth cannot be perfectly guaranteed because the operating system reclaims memory for other things, which causes occasional slow spikes, but that is acceptable because vision never runs where a user is waiting.
+
+The third stage is the one that makes vision genuinely useful. The agent cannot act on a paragraph of description; it needs data. So instead of asking the model to describe the screen, I ask it to identify the element and return a small JSON object with an element type, a label, and a confidence. A subtle but important finding here: Ollama has a forced-JSON mode, but with this small vision model it returned empty output, so the reliable approach is to describe the exact JSON shape in the prompt, let the model produce it as normal text, and then parse it by taking everything from the first brace to the last. That tolerates any stray text the model adds around the JSON.
+
+The reason all of this is designed as an off-to-the-side, occasional step is the core architectural bet of the whole project: the accessibility tree already names most elements for free and instantly, so vision is reserved for the small fraction of cases where the tree came back empty. Phase 3 is where that split shows up as a real number.
+
+---
+
+## Phase 3 in detail: distillation
+
+Distillation is the step that turns the raw recording into a plan a human can read and edit. The recorder is faithful but noisy: typing one sentence is dozens of separate keystroke events, holding a modifier key fires it dozens of times through auto-repeat, and there are stray clicks and corrections everywhere. A useful plan should not have hundreds of raw events; it should have the handful of meaningful steps you actually intended. Distillation boils the one down to the other.
+
+```mermaid
+flowchart TB
+    IN[("recording.db<br/>640 raw events<br/>every click and keystroke")]:::start
+
+    subgraph GROUP["1 - GROUP THE NOISE INTO STEPS (cheap rules, no model)"]
+        direction TB
+        G1["Rebuild typed text<br/>from raw keystrokes<br/><i>applies backspaces</i>"]:::rule
+        G2["Collapse repeated clicks<br/>on the same element into one"]:::rule
+        G3["Strip key-spam<br/><i>80 Ctrl repeats become nothing</i>"]:::rule
+        G1 --> G2 --> G3
+    end
+
+    subgraph SAFE["2 - MASK SECRETS"]
+        direction TB
+        S1["Detect password fields by name"]:::secret
+        S2["Store [SECRET: field] reference,<br/>never the real password"]:::secret
+        S1 --> S2
+    end
+
+    subgraph LABEL["3 - LABEL EACH STEP (accessibility-first)"]
+        direction TB
+        L1["Element already named?<br/>Label it instantly, free<br/><i>~86% of steps</i>"]:::free
+        L2["Name empty?<br/>Fall back to vision model<br/><i>~14% of steps</i>"]:::fallback
+    end
+
+    subgraph WRITE["4 - WRITE THE PLAN (two forms)"]
+        direction TB
+        W1["plan.txt<br/>readable, editable by you"]:::out
+        W2["plan.json<br/>structured, for the replay engine"]:::out
+    end
+
+    IN ==> GROUP
+    GROUP ==> SAFE
+    SAFE ==> LABEL
+    LABEL ==> WRITE
+
+    RESULT(["A clean, editable plan:<br/>174 readable steps<br/>from 640 raw events"]):::start
+    WRITE ==> RESULT
+
+    classDef start fill:#795548,color:#fff,stroke:#4e342e,stroke-width:2px
+    classDef rule fill:#fff8e1,color:#795548,stroke:#ffca28,stroke-width:1.5px
+    classDef secret fill:#fce4ec,color:#880e4f,stroke:#ec407a,stroke-width:1.5px
+    classDef free fill:#e8f5e9,color:#1b5e20,stroke:#66bb6a,stroke-width:1.5px
+    classDef fallback fill:#ede7f6,color:#311b92,stroke:#7e57c2,stroke-width:1.5px
+    classDef out fill:#e3f2fd,color:#0d47a1,stroke:#42a5f5,stroke-width:1.5px
+
+    style GROUP fill:#fffdf5,stroke:#ffca28,stroke-width:2px
+    style SAFE fill:#fef4f7,stroke:#ec407a,stroke-width:2px
+    style LABEL fill:#f6f8f6,stroke:#9e9e9e,stroke-width:2px
+    style WRITE fill:#f3f9ff,stroke:#42a5f5,stroke-width:2px
+```
+
+The first stage is pure pattern rules, no model needed, which is deliberate because cheap and deterministic logic should do the bulk of the cleanup. Consecutive keystrokes are gathered into a buffer and turned into a single type step, with the actual text rebuilt from the raw keys, including honoring backspaces so corrections come out as the final text. Repeated clicks on the same element collapse into one. Control-key auto-repeat, like the eighty Ctrl presses a single held key produced, simply disappears because it contributes nothing to the text.
+
+The second stage handles credentials. When the typing went into a field whose name looks like a password field, the plan does not store what was typed. Instead it stores a reference like [SECRET: Password], so the plan records that a password goes here without ever keeping the password itself in plaintext. The real value would be pulled from a secure store at replay time, never from the plan file. This keeps the plan safe to save, edit, and share.
+
+The third stage labels each step with a readable instruction, and this is where the core architectural bet pays off visibly. If the element already has a name from the accessibility tree, which it captured back in Phase 1, labeling is instant and free: "Click the Submit button", "Select Virginia", "Type Fairfax". Only when the name is empty does the step get handed to the Phase 2 vision model. On a full real recording, about 86 percent of steps were labeled straight from the tree with no model at all, and only about 14 percent would ever need vision. That number is the whole thesis of the project in one statistic.
+
+The fourth stage writes the result in two forms of the same workflow. plan.txt is the human-readable version, a numbered list of plain instructions you review and edit like a document. plan.json is the structured version, carrying the action, the element details, and the secret references, which is what the replay engine will read to actually execute each step.
+
+**What a real distillation looks like.** I recorded a complete job application on a Workday portal, start to finish: opening Overleaf, pasting and editing a resume, downloading and renaming it, then filling the entire multi-step application form with address, education, and demographic fields, and submitting. That produced 640 raw events. Distillation turned it into 174 readable steps, with the typed fields reconstructed correctly, the passwords masked, and the vast majority labeled straight from the accessibility tree. The resulting plan reads like a recipe of the whole application.
+
+---
 
 ## Roadmap
 
-Phase 1 (Recorder) is done. Next is Phase 2, standing up the local vision model with Ollama so the recording can start becoming understanding. After that comes distillation into editable plans, the replay engine built on a state machine with human approval at each step, correction memory backed by local embeddings, an MCP server so learned workflows can be called as tools, and finally an evaluation harness and a packaged installer.
+Phases 1 through 3 are done: the agent can record, understand, and plan. What remains:
+
+- **Phase 4 - Replay engine**: a state machine (LangGraph) that executes the plan one step at a time, finds each target with a self-healing locator that tries semantic methods first and vision last, highlights it with an on-screen overlay, waits for your approval, acts, and verifies the screen actually changed before moving on.
+- **Phase 5 - Correction memory**: pause, give plain-language feedback, the plan step is patched and the correction is saved into a local vector store so the lesson is remembered on future runs.
+- **Phase 6 - MCP server**: expose learned workflows as tools other agents can call.
+- **Phase 7 - Evaluation and packaging**: a benchmark for success rate and human interventions, plus a self-bootstrapping installer with hardware-aware model selection.
 
 ## Tech stack
 
-Python 3.11, pynput, pywinauto on the UIA backend, mss, and SQLite in WAL mode are in use today. Coming in later phases: Ollama running a quantized Qwen2.5-VL, LangGraph for the replay state machine, Playwright over the Chrome DevTools Protocol for browser control, sqlite-vec with nomic-embed-text for correction memory, PyQt6 for the on screen overlay, the MCP SDK, and self hosted Langfuse for tracing.
+In use today: Python 3.11, pynput, pywinauto on the UIA backend, mss, SQLite in WAL mode, Ollama running a quantized Qwen3-VL, and Pillow for image preparation. Coming in later phases: LangGraph for the replay state machine, Playwright over the Chrome DevTools Protocol for browser control, sqlite-vec with nomic-embed-text for correction memory, PyQt6 for the on-screen overlay, the MCP SDK, and self-hosted Langfuse for tracing.
 
-## Running the recorder
+## Running what exists
 
 ```bash
+# 1. record a workflow (press Esc to stop)
 pip install pynput pywinauto mss
 python mini_recorder.py
+
+# 2. try local vision on a captured screenshot (needs Ollama + qwen3-vl:2b)
+pip install ollama pillow
+python grounding_test.py
+
+# 3. distill the recording into a readable, editable plan
+python distill.py     # writes plan.txt and plan.json
 ```
 
-Press Esc to stop the recording. Open recording.db afterward in any SQLite viewer to see what it captured.
-
-A word of caution. The recorder captures screenshots and interface text of whatever is on your screen while it runs, so treat recording.db and the captures folder as private. Both are excluded from version control by the gitignore and never leave your machine.
+A word of caution. The recorder captures screenshots and interface text of whatever is on your screen while it runs, and the distilled plan can contain personal details from the workflow you recorded. So recording.db, the captures folder, and the plan files are all treated as private, excluded from version control by the gitignore, and never leave your machine.
