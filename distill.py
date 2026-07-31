@@ -80,6 +80,33 @@ def group_events(rows):
 
 #     return steps
 
+def label_step(step):
+    """Turn a grouped step into a human-readable intent line."""
+    if step["action"] == "type":
+        text = step["text"].strip().replace("\n", " ")
+        return f'Type "{text}"'
+
+    # it's a click
+    name = step["elem_name"].strip()
+    etype = step["elem_type"]
+
+    if not name:
+        return f"Click something (unlabeled {etype}) — needs vision"   # the fallback case
+
+    # choose a natural verb based on the element type
+    if etype in ("Button", "MenuItem"):
+        return f'Click the "{name}" {etype.lower()}'
+    elif etype in ("ListItem", "DataItem"):
+        return f'Select "{name}"'
+    elif etype in ("Edit", "ComboBox"):
+        return f'Click into the "{name}" field'
+    elif etype in ("TabItem",):
+        return f'Switch to tab "{name}"'
+    elif etype in ("Hyperlink",):
+        return f'Click the link "{name}"'
+    else:
+        return f'Click "{name}" ({etype})'
+
 
 conn = sqlite3.connect("recording.db")
 conn.row_factory = sqlite3.Row
@@ -88,9 +115,8 @@ conn.close()
 
 steps = group_events(rows)
 
+
 print(f"Raw events: {len(rows)}  ->  Grouped steps: {len(steps)}\n")
+print("=== DISTILLED PLAN ===\n")
 for i, s in enumerate(steps, 1):
-    if s["action"] == "type":
-        print(f"{i:3}. TYPE  \"{s['text']}\"")
-    else:
-        print(f"{i:3}. CLICK '{s['elem_name']}' [{s['elem_type']}]")
+    print(f"{i:3}. {label_step(s)}")
