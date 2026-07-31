@@ -1,5 +1,6 @@
 import sqlite3
 
+
 def reconstruct_text(keys):
     """Turn a list of raw key events into the actual typed text."""
     text = ""
@@ -15,19 +16,34 @@ def reconstruct_text(keys):
         else:
             text += k.strip("'")         # normal char like 'h' -> h
     return text
+
+
+def is_password_field(name):
+    """Detect if an element name looks like a password field."""
+    if not name:
+        return False
+    name_low = name.lower()
+    return "password" in name_low or "passcode" in name_low
+
+
 def group_events(rows):
-    """Collapse consecutive keystrokes into 'type' steps and repeated clicks into one."""
+    """Collapse consecutive keystrokes into 'type' steps, repeated clicks into one, and mask passwords."""
     steps = []
     key_buffer = []
+    last_field = ""      # name of the most recent field we clicked into
 
     for e in rows:
         if e["kind"] == "key":
             key_buffer.append(e["key"])
-        else:  # click
+        else:  # a click ends any run of typing
             if key_buffer:
                 text = reconstruct_text(key_buffer)
-                if text.strip():
-                    steps.append({"action": "type", "text": text})
+                if text.strip():                      # only if something real was typed
+                    if is_password_field(last_field):
+                        # never store the real password - store a reference instead
+                        steps.append({"action": "type", "text": f"[SECRET: {last_field}]", "secret": True})
+                    else:
+                        steps.append({"action": "type", "text": text})
                 key_buffer = []
 
             new_click = {
@@ -36,6 +52,7 @@ def group_events(rows):
                 "elem_type": e["elem_type"],
                 "x": e["x"], "y": e["y"],
             }
+            last_field = e["elem_name"]      # remember what we clicked into
 
             # collapse repeated clicks on the SAME element
             if (steps and steps[-1]["action"] == "click"
@@ -45,40 +62,17 @@ def group_events(rows):
 
             steps.append(new_click)
 
+    # flush any trailing typing
     if key_buffer:
         text = reconstruct_text(key_buffer)
         if text.strip():
-            steps.append({"action": "type", "text": text})
+            if is_password_field(last_field):
+                steps.append({"action": "type", "text": f"[SECRET: {last_field}]", "secret": True})
+            else:
+                steps.append({"action": "type", "text": text})
 
     return steps
-# def group_events(rows):
-#     """Collapse consecutive keystrokes into single 'type' steps."""
-#     steps = []
-#     key_buffer = []
 
-#     for e in rows:
-#         if e["kind"] == "key":
-#             key_buffer.append(e["key"])
-#         else:  # a click ends any run of typing
-#             if key_buffer:
-#                 text = reconstruct_text(key_buffer)
-#                 if text.strip():                      # only if something real was typed
-#                     steps.append({"action": "type", "text": text})
-#                 key_buffer = []
-#             steps.append({
-#                 "action": "click",
-#                 "elem_name": e["elem_name"],
-#                 "elem_type": e["elem_type"],
-#                 "x": e["x"], "y": e["y"],
-#             })
-
-#     # flush any trailing typing
-#     if key_buffer:
-#         text = reconstruct_text(key_buffer)
-#         if text.strip():
-#             steps.append({"action": "type", "text": text})
-
-#     return steps
 
 def label_step(step):
     """Turn a grouped step into a human-readable intent line."""
@@ -91,7 +85,7 @@ def label_step(step):
     etype = step["elem_type"]
 
     if not name:
-        return f"Click something (unlabeled {etype}) — needs vision"   # the fallback case
+        return f"Click something (unlabeled {etype}) - needs vision"   # the fallback case
 
     # choose a natural verb based on the element type
     if etype in ("Button", "MenuItem"):
@@ -114,7 +108,6 @@ rows = conn.execute("SELECT * FROM events ORDER BY ts").fetchall()
 conn.close()
 
 steps = group_events(rows)
-
 
 print(f"Raw events: {len(rows)}  ->  Grouped steps: {len(steps)}\n")
 print("=== DISTILLED PLAN ===\n")
