@@ -4,7 +4,7 @@ from langgraph.graph import StateGraph, END
 from langgraph.types import interrupt, Command
 from langgraph.checkpoint.memory import MemorySaver
 from typing import TypedDict
-
+from locator import locate
 
 # ---- the shared state that flows through every node ----
 # Everything here must be serializable (str/int/bool/list/dict) - no live objects.
@@ -50,11 +50,11 @@ def find_node(state):
     print(f"\n[FIND] step {state['step_index']+1}: {step['instruction']}")
     if step["action"] == "type":
         print("   (type step - no element to find)")
-        state["found"] = True          # type steps don't need an element
+        state["found"] = True
         return state
-    el = find_element(step["elem_name"], step["elem_type"])
+    el, tier = locate(step)                    # <-- use the 5-tier locator
     state["found"] = el is not None
-    print(f"   found '{step['elem_name']}'" if el else "   NOT FOUND")
+    print(f"   found via tier {tier}" if el else "   NOT FOUND by any tier")
     return state
 
 
@@ -97,14 +97,14 @@ def act_node(state):
             print(f'   >>> TYPED "{text}"')
 
     else:  # click
-        el = find_element(step["elem_name"], step["elem_type"])
+        el, tier = locate(step)                       # 5-tier self-healing locator
         if el:
             try:
                 el.set_focus()
             except Exception:
                 pass
             el.click_input()
-            print(f"   >>> CLICKED {step['elem_name']}")
+            print(f"   >>> CLICKED {step['elem_name']} (via tier {tier})")
             try:
                 state["last_window_title"] = el.top_level_parent().window_text()
             except Exception:
