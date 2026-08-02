@@ -9,6 +9,7 @@ class ReplayState(TypedDict):
     plan: list
     step_index: int
     done: bool
+    approved: bool  
     
 
 # ---- the locator (Tier 1) from find_test.py ----
@@ -40,10 +41,14 @@ def approve_node(state):
     # interrupt() PAUSES the graph and waits for a human answer
     answer = interrupt({"about_to_do": step["instruction"], "question": "approve?"})
     print(f"   human said: {answer}")
+    state["approved"] = (answer == "approve")     # new remember the decision
     return state
 
 # ---- NODE 3: perform the click ----
 def act_node(state):
+    if not state["approved"]:
+        print("****skipped aka rejected******")#showing some respect for rejection by accepting it 
+        return state
     step = state["plan"][state["step_index"]]
     el = find_element(step["elem_name"], step["elem_type"])
     if el:
@@ -85,7 +90,7 @@ test_plan = [
 ]
 
 config = {"configurable": {"thread_id": "test-run-1"}}
-state = {"plan": test_plan, "step_index": 0, "done": False}
+state = {"plan": test_plan, "step_index": 0, "done": False, "approved": False}
 
 print("=== Starting replay ===")
 result = app.invoke(state, config=config)
