@@ -9,6 +9,7 @@ class ReplayState(TypedDict):
     plan: list
     step_index: int
     done: bool
+    
 
 # ---- the locator (Tier 1) from find_test.py ----
 def find_element(elem_name, elem_type):
@@ -79,16 +80,32 @@ app = graph.compile(checkpointer=MemorySaver())
 test_plan = [
     {"step": 1, "instruction": "Click Minimize", "action": "click",
      "elem_name": "Minimize", "elem_type": "Button"},
+    {"step": 2, "instruction": "Click Minimize again", "action": "click",
+     "elem_name": "Minimize", "elem_type": "Button"},
 ]
 
 config = {"configurable": {"thread_id": "test-run-1"}}
 state = {"plan": test_plan, "step_index": 0, "done": False}
 
-# start the run - it will pause at the first interrupt
 print("=== Starting replay ===")
 result = app.invoke(state, config=config)
 
-# it paused at approve_node. show what it's asking, then resume with approval.
-print("\n>>> Graph paused for approval. Resuming with 'approve'...")
-result = app.invoke(Command(resume="approve"), config=config)
+# loop: keep resuming until the graph is finished
+while True:
+    # check if the graph is paused at an interrupt
+    snapshot = app.get_state(config)
+    if not snapshot.next:        # no next node = graph finished
+        break
+
+    # the graph is paused - ask the REAL human
+    interrupts = snapshot.tasks[0].interrupts if snapshot.tasks else []
+    if interrupts:
+        info = interrupts[0].value
+        print(f"\n>>> About to: {info['about_to_do']}")
+        choice = input("    Approve? (y/n): ").strip().lower()
+        answer = "approve" if choice == "y" else "reject"
+        result = app.invoke(Command(resume=answer), config=config)
+    else:
+        break
+
 print("\n=== Done ===")
