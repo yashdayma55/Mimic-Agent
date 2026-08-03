@@ -51,14 +51,22 @@ def locate(step, verbose=True):
             except Exception:
                 continue
 
-    # ---- TIER 4: partial / fuzzy name match ----
-    if name:
+  # ---- TIER 4: partial name match (short interactive controls only) ----
+    if name and len(name) > 3:
+        SAFE_TYPES = ("Button", "MenuItem", "ListItem", "Edit", "ComboBox",
+                      "CheckBox", "RadioButton", "TabItem", "Hyperlink", "TreeItem")
         for win in desktop.windows():
             try:
                 for el in win.descendants():
+                    if el.element_info.control_type not in SAFE_TYPES:
+                        continue
                     el_name = el.element_info.name or ""
-                    if name.lower() in el_name.lower() and len(name) > 3:
-                        log(f"Tier 4 hit (partial name): '{el_name}' contains '{name}'")
+                    # the element name must be SHORT and close to our target,
+                    # not a giant paragraph that merely contains the string
+                    if not el_name:
+                        continue
+                    if name.lower() in el_name.lower() and len(el_name) < len(name) + 15:
+                        log(f"Tier 4 hit (partial name): '{el_name}' [{el.element_info.control_type}]")
                         return el, 4
             except Exception:
                 continue
@@ -78,7 +86,7 @@ def locate(step, verbose=True):
 
 
 if __name__ == "__main__":
-    test_step = {"elem_name": "Text edito", "elem_type": "Document", "x": 500, "y": 400}
+    test_step = {"elem_name": "zzznonexistent", "elem_type": "Document", "x": 500, "y": 400}
     got = locate(test_step)
     if got[0] == "VISION":
         print(f"\nVISION-located: {got[2]}")
