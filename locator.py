@@ -2,12 +2,13 @@ from pywinauto import Desktop
 
 
 def locate(step, verbose=True):
-    """5-tier self-healing locator.
+    """5-tier self-healing locator + browser tier.
 
     Returns one of:
-      (element, tier)              for tiers 1-4  (a pywinauto element you can click)
-      ("VISION", 5, result_dict)   for tier 5     (vision hit - has x,y coords)
-      (None, None)                 nothing found
+      ("BROWSER", 0, {element, page})  browser step  (a Playwright locator)
+      (element, tier)                  tiers 1-4      (a pywinauto element)
+      ("VISION", 5, result_dict)       tier 5         (vision hit - has x,y coords)
+      (None, None)                     nothing found
     """
     name = step.get("elem_name", "")
     etype = step.get("elem_type", "")
@@ -16,6 +17,17 @@ def locate(step, verbose=True):
     def log(msg):
         if verbose:
             print(f"      {msg}")
+
+    # ---- BROWSER TIER: if this is a web step, use Playwright ----
+    try:
+        from browser_locator import is_browser_step, find_in_browser
+        if is_browser_step(step):
+            el, page = find_in_browser(step, verbose=verbose)
+            if el:
+                log("Browser tier hit (playwright)")
+                return "BROWSER", 0, {"element": el, "page": page}
+    except Exception as e:
+        log(f"browser tier skipped: {e}")
 
     # ---- TIER 1: exact role + name ----
     if name:
@@ -51,7 +63,7 @@ def locate(step, verbose=True):
             except Exception:
                 continue
 
-  # ---- TIER 4: partial name match (short interactive controls only) ----
+    # ---- TIER 4: partial name match (short interactive controls only) ----
     if name and len(name) > 3:
         SAFE_TYPES = ("Button", "MenuItem", "ListItem", "Edit", "ComboBox",
                       "CheckBox", "RadioButton", "TabItem", "Hyperlink", "TreeItem")
@@ -88,7 +100,9 @@ def locate(step, verbose=True):
 if __name__ == "__main__":
     test_step = {"elem_name": "zzznonexistent", "elem_type": "Document", "x": 500, "y": 400}
     got = locate(test_step)
-    if got[0] == "VISION":
+    if got[0] == "BROWSER":
+        print(f"\nBROWSER-located: {got[2]}")
+    elif got[0] == "VISION":
         print(f"\nVISION-located: {got[2]}")
     elif got[0]:
         print(f"\nFOUND at tier {got[1]}: {got[0].rectangle()}")

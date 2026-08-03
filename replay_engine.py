@@ -15,8 +15,8 @@ class ReplayState(TypedDict):
     done: bool
     approved: bool
     last_window_title: str
-    found: bool               # did we find the element this step?
-    missing_choice: str       # what the human chose when an element was missing
+    found: bool
+    missing_choice: str
 
 
 def _refocus_last_target(state):
@@ -41,9 +41,11 @@ def find_node(state):
         state["found"] = True
         return state
 
-    got = locate(step)                          # 5-tier locator: (el,tier) or ("VISION",5,res) or (None,None)
+    got = locate(step)
     state["found"] = got[0] is not None
-    if got[0] == "VISION":
+    if got[0] == "BROWSER":
+        print("   found via browser (playwright)")
+    elif got[0] == "VISION":
         print("   found via vision (tier 5)")
     elif got[0]:
         print(f"   found via tier {got[1]}")
@@ -82,40 +84,56 @@ def act_node(state):
     step = state["plan"][state["step_index"]]
 
     if step["action"] == "type":
-        _refocus_last_target(state)
         text = step["text"]
         if text.startswith("[SECRET"):
             print(f"   >>> would type a secret ({text}) - skipping in test")
-        else:
-            send_keys(text, with_spaces=True)
-            print(f'   >>> TYPED "{text}"')
+            return state
 
-    else:  # click
-        got = locate(step)                      # re-locate at action time
-
-        if got[0] == "VISION":
-            # tier 5: vision gave coordinates - click them directly
-            import pyautogui
-            res = got[2]
-            pyautogui.click(res["x"], res["y"])
-            print(f"   >>> CLICKED at ({res['x']},{res['y']}) via VISION (tier 5)")
-
-        elif got[0]:
-            # tiers 1-4: a real pywinauto element
-            el, tier = got[0], got[1]
+        # if the last thing we found was a browser page, type there via playwright
+        got = locate(step) if step.get("elem_name") else (None, None)
+        if got and got[0] == "BROWSER":
             try:
-                el.set_focus()
-            except Exception:
-                pass
-            el.click_input()
-            print(f"   >>> CLICKED {step.get('elem_name','?')} (via tier {tier})")
-            try:
-                state["last_window_title"] = el.top_level_parent().window_text()
+                got[2]["element"].fill(text)
+                print(f'   >>> FILLED "{text}" (browser)')
+                return state
             except Exception:
                 pass
 
-        else:
-            print(f"   >>> could not find {step.get('elem_name','?')}")
+        # otherwise desktop typing: refocus target window then send keys
+        _refocus_last_target(state)
+        send_keys(text, with_spaces=True)
+        print(f'   >>> TYPED "{text}"')
+        return state
+
+    # ---- click ----
+    got = locate(step)
+
+    if got[0] == "BROWSER":
+        el = got[2]["element"]
+        el.click()
+        print(f"   >>> CLICKED '{step.get('elem_name')}' via BROWSER (playwright)")
+
+    elif got[0] == "VISION":
+        import pyautogui
+        res = got[2]
+        pyautogui.click(res["x"], res["y"])
+        print(f"   >>> CLICKED at ({res['x']},{res['y']}) via VISION (tier 5)")
+
+    elif got[0]:
+        el, tier = got[0], got[1]
+        try:
+            el.set_focus()
+        except Exception:
+            pass
+        el.click_input()
+        print(f"   >>> CLICKED {step.get('elem_name','?')} (via tier {tier})")
+        try:
+            state["last_window_title"] = el.top_level_parent().window_text()
+        except Exception:
+            pass
+
+    else:
+        print(f"   >>> could not find {step.get('elem_name','?')}")
 
     return state
 
@@ -128,7 +146,7 @@ def advance_node(state):
     return state
 
 
-# ---- routing functions (the conditional edges) ----
+# ---- routing functions (conditional edges) ----
 def after_find(state):
     return "approve" if state["found"] else "missing"
 
@@ -178,7 +196,6 @@ state = {"plan": test_plan, "step_index": 0, "done": False,
 print("=== Starting replay ===")
 result = app.invoke(state, config=config)
 
-# resume loop: handle whichever kind of interrupt the graph paused on
 while True:
     snapshot = app.get_state(config)
     if not snapshot.next:
