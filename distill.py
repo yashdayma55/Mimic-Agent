@@ -1,4 +1,5 @@
 import sqlite3
+import json
 
 
 def reconstruct_text(keys):
@@ -102,14 +103,32 @@ def label_step(step):
         return f'Click "{name}" ({etype})'
 
 
+# ---- read the recorded events ----
 conn = sqlite3.connect("recording.db")
 conn.row_factory = sqlite3.Row
 rows = conn.execute("SELECT * FROM events ORDER BY ts").fetchall()
 conn.close()
 
+# ---- distill into grouped, labeled steps ----
 steps = group_events(rows)
 
-print(f"Raw events: {len(rows)}  ->  Grouped steps: {len(steps)}\n")
-print("=== DISTILLED PLAN ===\n")
+labeled = []
 for i, s in enumerate(steps, 1):
-    print(f"{i:3}. {label_step(s)}")
+    labeled.append({"step": i, "instruction": label_step(s), **s})
+
+# ---- 1. human-readable plan.txt (for you to review and edit) ----
+with open("plan.txt", "w", encoding="utf-8") as f:
+    f.write(f"MimicAgent Plan  ({len(steps)} steps, from {len(rows)} raw events)\n")
+    f.write("=" * 50 + "\n\n")
+    for item in labeled:
+        f.write(f"{item['step']:3}. {item['instruction']}\n")
+
+# ---- 2. structured plan.json (for the replay engine to execute) ----
+with open("plan.json", "w", encoding="utf-8") as f:
+    json.dump(labeled, f, indent=2)
+
+# ---- also print to the terminal ----
+print(f"Raw events: {len(rows)}  ->  Grouped steps: {len(steps)}")
+print("Wrote plan.txt and plan.json\n")
+for item in labeled:
+    print(f"{item['step']:3}. {item['instruction']}")
