@@ -8,7 +8,7 @@ from typing import TypedDict
 from locator import locate
 
 
-# ---- global hotkey approval: Enter=approve, Esc=reject (no terminal focus needed) ----
+# ---- global hotkey approval fallback: Enter=approve, Esc=reject ----
 def wait_for_hotkey():
     decision = {"answer": None}
     def on_press(key):
@@ -33,6 +33,7 @@ class ReplayState(TypedDict):
     last_window_title: str
     found: bool
     missing_choice: str
+    target_rect: list          # [L, T, R, B] of the element to highlight
 
 
 def _refocus_last_target(state):
@@ -52,6 +53,7 @@ def _refocus_last_target(state):
 def find_node(state):
     step = state["plan"][state["step_index"]]
     print(f"\n[FIND] step {state['step_index']+1}: {step['instruction']}")
+    state["target_rect"] = []
     if step["action"] == "type":
         print("   (type step - no element to find)")
         state["found"] = True
@@ -63,8 +65,15 @@ def find_node(state):
         print("   found via browser (playwright)")
     elif got[0] == "VISION":
         print("   found via vision (tier 5)")
+        res = got[2]
+        state["target_rect"] = [res["x"] - 50, res["y"] - 20, res["x"] + 50, res["y"] + 20]
     elif got[0]:
         print(f"   found via tier {got[1]}")
+        try:
+            r = got[0].rectangle()
+            state["target_rect"] = [r.left, r.top, r.right, r.bottom]
+        except Exception:
+            pass
     else:
         print("   NOT FOUND by any tier")
     return state
@@ -105,7 +114,7 @@ def act_node(state):
             print(f"   >>> would type a secret ({text}) - skipping in test")
             return state
 
-        # if this is a browser step, fill via playwright
+        # browser step -> fill via playwright
         got = locate(step) if step.get("elem_name") else (None, None)
         if got and got[0] == "BROWSER":
             try:
@@ -115,7 +124,7 @@ def act_node(state):
             except Exception:
                 pass
 
-        # otherwise desktop typing
+        # desktop typing
         _refocus_last_target(state)
         send_keys(text, with_spaces=True)
         print(f'   >>> TYPED "{text}"')
@@ -125,8 +134,7 @@ def act_node(state):
     got = locate(step)
 
     if got[0] == "BROWSER":
-        el = got[2]["element"]
-        el.click()
+        got[2]["element"].click()
         print(f"   >>> CLICKED '{step.get('elem_name')}' via BROWSER (playwright)")
 
     elif got[0] == "VISION":
@@ -207,7 +215,7 @@ test_plan = [
 config = {"configurable": {"thread_id": "test-run-1"}}
 state = {"plan": test_plan, "step_index": 0, "done": False,
          "approved": False, "last_window_title": "",
-         "found": False, "missing_choice": ""}
+         "found": False, "missing_choice": "", "target_rect": []}
 
 print("=== Starting replay ===")
 result = app.invoke(state, config=config)
@@ -223,17 +231,27 @@ while True:
     info = interrupts[0].value
 
     if "problem" in info:
-        # missing-element interrupt (still uses terminal for the 3-way choice)
+        # missing-element interrupt (terminal for the 3-way choice)
         print(f"\n!!! {info['problem']}")
         choice = input("    retry / skip / stop: ").strip().lower()
         if choice not in ("retry", "skip", "stop"):
             choice = "stop"
         result = app.invoke(Command(resume=choice), config=config)
     else:
-        # approve-action interrupt: use GLOBAL HOTKEY (no focus steal)
+        # approve-action interrupt: draw the visual overlay box, then wait for hotkey
         print(f"\n>>> About to: {info['about_to_do']}")
-        print("    Press ENTER to approve, ESC to reject...")
-        answer = wait_for_hotkey()
+        rect = snapshot.values.get("target_rect") or []
+        if rect:
+            try:
+                from overlay import approve_with_overlay
+                answer = approve_with_overlay(tuple(rect), info["about_to_do"])
+            except Exception as e:
+                print(f"    (overlay failed: {e}, using hotkey)")
+                print("    Press ENTER to approve, ESC to reject...")
+                answer = wait_for_hotkey()
+        else:
+            print("    Press ENTER to approve, ESC to reject...")
+            answer = wait_for_hotkey()
         print(f"    decision: {answer}")
         result = app.invoke(Command(resume=answer), config=config)
 
