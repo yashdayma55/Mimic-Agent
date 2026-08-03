@@ -3,7 +3,8 @@ from pywinauto.keyboard import send_keys
 from pynput import keyboard as kb
 from langgraph.graph import StateGraph, END
 from langgraph.types import interrupt, Command
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.sqlite import SqliteSaver
+import sqlite3
 from typing import TypedDict
 from locator import locate
 
@@ -202,7 +203,9 @@ graph.add_edge("approve", "act")
 graph.add_edge("act", "advance")
 graph.add_conditional_edges("advance", more_steps)
 
-app = graph.compile(checkpointer=MemorySaver())
+conn = sqlite3.connect("replay_checkpoints.db", check_same_thread=False)
+checkpointer = SqliteSaver(conn)
+app = graph.compile(checkpointer=checkpointer)
 
 
 # ---- a tiny SAFE test plan: click into Notepad, then type ----
