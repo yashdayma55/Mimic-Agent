@@ -16,6 +16,7 @@ import io
 import json
 import mss
 from PIL import Image
+import ollama
 
 
 # ---- CONFIG: which vision backend to use ----
@@ -45,9 +46,10 @@ def grab_screen_region(cx, cy, box=400):
 
 # ---- PROVIDER 1: local Ollama vision (your Phase 2 approach) ----
 def _ask_local(image_bytes, target_desc):
-    import ollama
-    prompt = f"""Look at this cropped screenshot. I am trying to find this UI element: "{target_desc}".
-Respond ONLY with JSON: {{"found": true/false, "what_you_see": "short description", "confidence": "high/medium/low"}}"""
+    
+    prompt = """Look at the CENTER of this cropped screenshot. Is there a clickable UI element there (a button, menu, link, icon, or field)?
+    Respond ONLY with JSON: {"found": true/false, "what_you_see": "what the element is", "confidence": "high/medium/low"}
+    Set found=true if there is any clickable element near the center."""
     resp = ollama.chat(
         model="qwen3-vl:2b",
         messages=[{"role": "user", "content": prompt, "images": [image_bytes]}],
