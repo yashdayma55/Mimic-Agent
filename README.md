@@ -424,12 +424,11 @@ Vision is the last-resort tier, and it can run two ways behind a single switch. 
 
 ## Roadmap
 
-Phases 1 through 3 are done: the agent can record, understand, and plan. What remains:
+Phases 1 through 4 are done: the agent can record, understand, plan, and replay. What remains:
 
-- **Phase 4 - Replay engine**: a state machine (LangGraph) that executes the plan one step at a time, finds each target with a self-healing locator that tries semantic methods first and vision last, highlights it with an on-screen overlay, waits for your approval, acts, and verifies the screen actually changed before moving on.
-- **Phase 5 - Correction memory**: pause, give plain-language feedback, the plan step is patched and the correction is saved into a local vector store so the lesson is remembered on future runs.
+- **Phase 5 - Correction memory**: pause a replay mid-run, tell the agent in plain words what to change, and have it interpret the instruction, patch that step, and continue, saving the correction into a local vector store so the lesson is remembered on future runs.
 - **Phase 6 - MCP server**: expose learned workflows as tools other agents can call.
-- **Phase 7 - Evaluation and packaging**: a benchmark for success rate and human interventions, plus a self-bootstrapping installer with hardware-aware model selection.
+- **Phase 7 - Evaluation and packaging**: a benchmark for success rate and human interventions, a saved workflow library so many recorded workflows can be kept and re-run like a history, and a self-bootstrapping installer with hardware-aware model selection.
 
 ## Tech stack
 
