@@ -6,6 +6,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from typing import TypedDict
 from locator import locate
 
+
 # ---- the shared state that flows through every node ----
 # Everything here must be serializable (str/int/bool/list/dict) - no live objects.
 class ReplayState(TypedDict):
@@ -16,19 +17,6 @@ class ReplayState(TypedDict):
     last_window_title: str
     found: bool               # did we find the element this step?
     missing_choice: str       # what the human chose when an element was missing
-
-
-# ---- the locator (Tier 1): find an element by accessibility name + type ----
-def find_element(elem_name, elem_type):
-    desktop = Desktop(backend="uia")
-    for win in desktop.windows():
-        try:
-            matches = win.descendants(title=elem_name, control_type=elem_type)
-            if matches:
-                return matches[0]
-        except Exception:
-            continue
-    return None
 
 
 def _refocus_last_target(state):
@@ -52,9 +40,15 @@ def find_node(state):
         print("   (type step - no element to find)")
         state["found"] = True
         return state
-    el, tier = locate(step)                    # <-- use the 5-tier locator
-    state["found"] = el is not None
-    print(f"   found via tier {tier}" if el else "   NOT FOUND by any tier")
+
+    got = locate(step)                          # 5-tier locator: (el,tier) or ("VISION",5,res) or (None,None)
+    state["found"] = got[0] is not None
+    if got[0] == "VISION":
+        print("   found via vision (tier 5)")
+    elif got[0]:
+        print(f"   found via tier {got[1]}")
+    else:
+        print("   NOT FOUND by any tier")
     return state
 
 
@@ -62,7 +56,7 @@ def find_node(state):
 def missing_node(state):
     step = state["plan"][state["step_index"]]
     answer = interrupt({
-        "problem": f"Could not find '{step['elem_name']}' for step {state['step_index']+1}",
+        "problem": f"Could not find '{step.get('elem_name','?')}' for step {state['step_index']+1}",
         "question": "retry / skip / stop?"
     })
     print(f"   human chose: {answer}")
@@ -97,20 +91,31 @@ def act_node(state):
             print(f'   >>> TYPED "{text}"')
 
     else:  # click
-        el, tier = locate(step)                       # 5-tier self-healing locator
-        if el:
+        got = locate(step)                      # re-locate at action time
+
+        if got[0] == "VISION":
+            # tier 5: vision gave coordinates - click them directly
+            import pyautogui
+            res = got[2]
+            pyautogui.click(res["x"], res["y"])
+            print(f"   >>> CLICKED at ({res['x']},{res['y']}) via VISION (tier 5)")
+
+        elif got[0]:
+            # tiers 1-4: a real pywinauto element
+            el, tier = got[0], got[1]
             try:
                 el.set_focus()
             except Exception:
                 pass
             el.click_input()
-            print(f"   >>> CLICKED {step['elem_name']} (via tier {tier})")
+            print(f"   >>> CLICKED {step.get('elem_name','?')} (via tier {tier})")
             try:
                 state["last_window_title"] = el.top_level_parent().window_text()
             except Exception:
                 pass
+
         else:
-            print(f"   >>> could not find {step['elem_name']}")
+            print(f"   >>> could not find {step.get('elem_name','?')}")
 
     return state
 
@@ -125,17 +130,16 @@ def advance_node(state):
 
 # ---- routing functions (the conditional edges) ----
 def after_find(state):
-    # if found -> approve the action; if not -> handle the missing element
     return "approve" if state["found"] else "missing"
 
 def after_missing(state):
     choice = state["missing_choice"]
     if choice == "retry":
-        return "find"          # look again (maybe you opened the app)
+        return "find"
     elif choice == "skip":
-        return "advance"       # skip this step
+        return "advance"
     else:
-        return END             # stop the whole run
+        return END
 
 def more_steps(state):
     return "find" if not state["done"] else END
@@ -150,8 +154,8 @@ graph.add_node("act", act_node)
 graph.add_node("advance", advance_node)
 
 graph.set_entry_point("find")
-graph.add_conditional_edges("find", after_find)      # found? -> approve : missing
-graph.add_conditional_edges("missing", after_missing)  # retry / skip / stop
+graph.add_conditional_edges("find", after_find)
+graph.add_conditional_edges("missing", after_missing)
 graph.add_edge("approve", "act")
 graph.add_edge("act", "advance")
 graph.add_conditional_edges("advance", more_steps)
@@ -177,7 +181,7 @@ result = app.invoke(state, config=config)
 # resume loop: handle whichever kind of interrupt the graph paused on
 while True:
     snapshot = app.get_state(config)
-    if not snapshot.next:                      # no next node = graph finished
+    if not snapshot.next:
         break
     interrupts = snapshot.tasks[0].interrupts if snapshot.tasks else []
     if not interrupts:
@@ -186,14 +190,12 @@ while True:
     info = interrupts[0].value
 
     if "problem" in info:
-        # a "missing element" interrupt
         print(f"\n!!! {info['problem']}")
         choice = input("    retry / skip / stop: ").strip().lower()
         if choice not in ("retry", "skip", "stop"):
             choice = "stop"
         result = app.invoke(Command(resume=choice), config=config)
     else:
-        # an "approve action" interrupt
         print(f"\n>>> About to: {info['about_to_do']}")
         choice = input("    Approve? (y/n): ").strip().lower()
         answer = "approve" if choice == "y" else "reject"

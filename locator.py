@@ -1,7 +1,14 @@
 from pywinauto import Desktop
 
+
 def locate(step, verbose=True):
-    """5-tier self-healing locator. Returns (element, tier) or (None, None)."""
+    """5-tier self-healing locator.
+
+    Returns one of:
+      (element, tier)              for tiers 1-4  (a pywinauto element you can click)
+      ("VISION", 5, result_dict)   for tier 5     (vision hit - has x,y coords)
+      (None, None)                 nothing found
+    """
     name = step.get("elem_name", "")
     etype = step.get("elem_type", "")
     desktop = Desktop(backend="uia")
@@ -56,16 +63,26 @@ def locate(step, verbose=True):
             except Exception:
                 continue
 
-    # ---- TIER 5: vision fallback (Phase 2) ----
-    log("Tier 5 (vision) would run here - not wired yet")
-    # TODO: crop screenshot at step['x'],step['y'], ask the model to confirm
+    # ---- TIER 5: vision fallback (local Ollama or API) ----
+    try:
+        from vision_locator import locate_with_vision
+        result = locate_with_vision(step, verbose=verbose)
+        if result.get("found"):
+            log(f"Tier 5 hit (vision): {result.get('what_you_see')}")
+            return "VISION", 5, result       # coords-based result, engine clicks x,y
+        log("Tier 5: vision could not confirm the element")
+    except Exception as e:
+        log(f"Tier 5 error: {e}")
+
     return None, None
 
 
 if __name__ == "__main__":
     test_step = {"elem_name": "Text edito", "elem_type": "Document", "x": 500, "y": 400}
-    el, tier = locate(test_step)
-    if el:
-        print(f"\nFOUND at tier {tier}: {el.rectangle()}")
+    got = locate(test_step)
+    if got[0] == "VISION":
+        print(f"\nVISION-located: {got[2]}")
+    elif got[0]:
+        print(f"\nFOUND at tier {got[1]}: {got[0].rectangle()}")
     else:
         print("\nNOT FOUND by any tier")
