@@ -1,10 +1,26 @@
 from pywinauto import Desktop
 from pywinauto.keyboard import send_keys
+from pynput import keyboard as kb
 from langgraph.graph import StateGraph, END
 from langgraph.types import interrupt, Command
 from langgraph.checkpoint.memory import MemorySaver
 from typing import TypedDict
 from locator import locate
+
+
+# ---- global hotkey approval: Enter=approve, Esc=reject (no terminal focus needed) ----
+def wait_for_hotkey():
+    decision = {"answer": None}
+    def on_press(key):
+        if key == kb.Key.enter:
+            decision["answer"] = "approve"
+            return False
+        elif key == kb.Key.esc:
+            decision["answer"] = "reject"
+            return False
+    with kb.Listener(on_press=on_press) as listener:
+        listener.join()
+    return decision["answer"]
 
 
 # ---- the shared state that flows through every node ----
@@ -89,7 +105,7 @@ def act_node(state):
             print(f"   >>> would type a secret ({text}) - skipping in test")
             return state
 
-        # if the last thing we found was a browser page, type there via playwright
+        # if this is a browser step, fill via playwright
         got = locate(step) if step.get("elem_name") else (None, None)
         if got and got[0] == "BROWSER":
             try:
@@ -99,7 +115,7 @@ def act_node(state):
             except Exception:
                 pass
 
-        # otherwise desktop typing: refocus target window then send keys
+        # otherwise desktop typing
         _refocus_last_target(state)
         send_keys(text, with_spaces=True)
         print(f'   >>> TYPED "{text}"')
@@ -207,15 +223,18 @@ while True:
     info = interrupts[0].value
 
     if "problem" in info:
+        # missing-element interrupt (still uses terminal for the 3-way choice)
         print(f"\n!!! {info['problem']}")
         choice = input("    retry / skip / stop: ").strip().lower()
         if choice not in ("retry", "skip", "stop"):
             choice = "stop"
         result = app.invoke(Command(resume=choice), config=config)
     else:
+        # approve-action interrupt: use GLOBAL HOTKEY (no focus steal)
         print(f"\n>>> About to: {info['about_to_do']}")
-        choice = input("    Approve? (y/n): ").strip().lower()
-        answer = "approve" if choice == "y" else "reject"
+        print("    Press ENTER to approve, ESC to reject...")
+        answer = wait_for_hotkey()
+        print(f"    decision: {answer}")
         result = app.invoke(Command(resume=answer), config=config)
 
 print("\n=== Done ===")
