@@ -293,6 +293,135 @@ The fourth stage writes the result in two forms of the same workflow. plan.txt i
 
 ---
 
+---
+
+## Phase 4 in detail: the replay engine
+
+This is the phase where MimicAgent stops being something that watches and understands, and becomes something that acts. It reads the plan from Phase 3 and performs it on a live screen, one step at a time, showing you a red box around each target and waiting for your go-ahead before it touches anything. It is the largest phase and the one that ties the whole project together: the element names captured in Phase 1 become the things it hunts for, the vision model from Phase 2 becomes its last-resort eyes, and the plan from Phase 3 becomes its script.
+
+The engine is a small state machine. Every step travels the same five beats, and the whole thing is built so it can pause forever waiting for a human and resume from exactly where it stopped.
+
+```mermaid
+flowchart TB
+    START(["plan.json<br/>the distilled workflow"]):::start
+
+    subgraph LOOP["for each step - a careful five-beat cycle"]
+        direction TB
+        FIND["FIND<br/>locate the target<br/>(5-tier self-healing locator)"]:::find
+        CHECK{{"found it?"}}:::gate
+        MISS["MISSING<br/>stop and ask:<br/>retry / skip / stop"]:::miss
+        APPROVE["APPROVE<br/>draw a red box on screen,<br/>wait for ENTER or ESC<br/><i>global hotkey, no focus steal</i>"]:::human
+        ACT["ACT<br/>click the element,<br/>type text, or fill a web field"]:::act
+        ADV["ADVANCE<br/>save a checkpoint,<br/>go to next step"]:::act
+        FIND --> CHECK
+        CHECK -->|"no"| MISS
+        CHECK -->|"yes"| APPROVE
+        APPROVE --> ACT --> ADV
+        MISS -.retry.-> FIND
+    end
+
+    START ==> FIND
+    ADV ==> DONE(["workflow complete"]):::start
+    MISS -.stop.-> DONE
+
+    classDef start fill:#263238,color:#fff,stroke:#000,stroke-width:2px
+    classDef find fill:#e8f5e9,color:#1b5e20,stroke:#66bb6a,stroke-width:1.5px
+    classDef gate fill:#fff8e1,color:#795548,stroke:#ffca28,stroke-width:1.5px
+    classDef miss fill:#fff3e0,color:#e65100,stroke:#ff9800,stroke-width:1.5px
+    classDef human fill:#fce4ec,color:#880e4f,stroke:#ec407a,stroke-width:1.5px
+    classDef act fill:#e3f2fd,color:#0d47a1,stroke:#42a5f5,stroke-width:1.5px
+
+    style LOOP fill:#fafafa,stroke:#9e9e9e,stroke-width:2px
+```
+
+The reason this is a state machine and not a plain loop is the pausing. A human stops the agent, looks at the box, maybe thinks for a minute, then approves. The agent must be able to freeze at that exact point, hold everything, and pick up cleanly when the answer comes. The state machine is built with LangGraph, whose interrupt mechanism does exactly this: a node can pause the whole graph, hand a question out to the human, and resume from that spot when the answer arrives. Every step also writes a checkpoint to a small SQLite file, so a run that is stopped halfway can be resumed later from the right step rather than started over.
+
+### Finding the target: the five-tier self-healing locator
+
+The hardest part of replay is not clicking, it is finding. When you recorded, the screen looked one way; when you replay, a window may have moved, a page may have reflowed, a list may have scrolled. Clicking the old coordinates blindly is exactly the brittle pixel-chasing the whole project set out to avoid. So instead the engine hunts for each element by meaning, trying a series of strategies from most reliable to least, and taking the first one that works. Because it recovers when the strong strategies fail, it is called self-healing.
+
+```mermaid
+flowchart TB
+    STEP(["a step needs its target found"]):::start
+
+    ROUTE{{"is this a<br/>browser step?"}}:::gate
+
+    subgraph BROWSER["BROWSER PATH - Playwright over Chrome DevTools"]
+        direction TB
+        BR["find inside the live web page<br/>by role + name, then by text"]:::br
+    end
+
+    subgraph DESKTOP["DESKTOP PATH - the 5-tier self-healing locator"]
+        direction TB
+        T1["Tier 1 - exact role + name<br/><i>the Button named 'Submit'</i>"]:::t1
+        T2["Tier 2 - automation id<br/><i>a stable developer id</i>"]:::t2
+        T3["Tier 3 - name only, any type"]:::t3
+        T4["Tier 4 - fuzzy / partial name<br/><i>short interactive controls only</i>"]:::t4
+        T5["Tier 5 - vision<br/><i>look at the screen, last resort</i>"]:::t5
+        T1 -->|"miss"| T2 -->|"miss"| T3 -->|"miss"| T4 -->|"miss"| T5
+    end
+
+    subgraph VISION["VISION BACKENDS - swappable"]
+        direction LR
+        VL["local Ollama<br/>qwen3-vl:2b<br/><i>private, offline</i>"]:::vl
+        VA["API provider<br/>Claude / OpenAI / Gemini<br/><i>fast, opt-in key</i>"]:::va
+    end
+
+    STEP --> ROUTE
+    ROUTE -->|"yes"| BROWSER
+    ROUTE -->|"no"| DESKTOP
+    T5 -.uses.-> VISION
+
+    BR -.found.-> HIT(["hand back a target<br/>the engine can act on"]):::start
+    T1 -.found.-> HIT
+    T2 -.found.-> HIT
+    T3 -.found.-> HIT
+    T4 -.found.-> HIT
+    VISION -.coords.-> HIT
+
+    classDef start fill:#263238,color:#fff,stroke:#000,stroke-width:2px
+    classDef gate fill:#fff8e1,color:#795548,stroke:#ffca28,stroke-width:1.5px
+    classDef br fill:#e1f5fe,color:#01579b,stroke:#039be5,stroke-width:1.5px
+    classDef t1 fill:#e8f5e9,color:#1b5e20,stroke:#66bb6a,stroke-width:1.5px
+    classDef t2 fill:#e8f5e9,color:#1b5e20,stroke:#81c784,stroke-width:1.5px
+    classDef t3 fill:#fff8e1,color:#795548,stroke:#ffca28,stroke-width:1.5px
+    classDef t4 fill:#fff3e0,color:#e65100,stroke:#ff9800,stroke-width:1.5px
+    classDef t5 fill:#ede7f6,color:#311b92,stroke:#7e57c2,stroke-width:1.5px
+    classDef vl fill:#ede7f6,color:#311b92,stroke:#7e57c2,stroke-width:1.5px
+    classDef va fill:#e8eaf6,color:#1a237e,stroke:#5c6bc0,stroke-width:1.5px
+
+    style BROWSER fill:#f2fbff,stroke:#039be5,stroke-width:2px
+    style DESKTOP fill:#f6f8f6,stroke:#9e9e9e,stroke-width:2px
+    style VISION fill:#f6f3fc,stroke:#7e57c2,stroke-width:2px
+```
+
+The clearest way to think about the tiers is finding a friend in a crowd. First you look for their face, which is the most reliable signal. That is Tier 1: match the element by both its role and its exact name, the Button actually named Submit. If that fails, you look for the bright jacket they told you they would wear, a stable identifier, which is Tier 2 matching on the developer-assigned automation id. If that fails you match on name alone regardless of type, Tier 3, since sometimes an app reports the same label under a different control type than expected. If that still fails, Tier 4 tries a fuzzy partial-name match, and if all the semantic tiers come up empty, Tier 5 falls back to actually looking at the screen with the vision model. A dumb macro only ever knows the last resort, the exact spot you agreed to meet, which is why it breaks the moment anything moves.
+
+Tier 4, the fuzzy match, taught a real lesson and is worth calling out. The first version simply looked for any on-screen element whose name contained the search text. On a real screen that is dangerous: a code editor and a chat window both display arbitrary text, and searching for a short label happily matched a whole paragraph of source code or a message that merely contained the word. The fix was to constrain Tier 4 to short, genuinely interactive controls only, buttons and menu items and fields, and to require the found name to be close in length to what was searched for. A real button label is short; a paragraph that happens to contain the word is not. Constraining the fuzzy tier this way is the difference between self-healing and self-sabotage.
+
+Browsers get their own path. To the desktop accessibility system a Chrome window is largely one opaque box, so finding the City field inside a web form through desktop automation is unreliable. Instead, when a step is a browser step, the engine talks to the browser directly through Playwright connected over the Chrome DevTools Protocol, which can read the page's own accessibility tree and find elements by role and name inside the page. One operational detail matters here: this attaches to a Chrome that is already running with a debugging port open, rather than launching a fresh empty browser, so it works inside your real logged-in sessions. Chrome has to be started with that port before a browser workflow runs, or the connection is simply refused.
+
+### Acting on what was found, and knowing it worked
+
+The five tiers hand back two different kinds of things, and the engine has to treat them differently. The desktop and browser tiers return a live handle to a real interface element, which knows how to click itself precisely wherever it currently sits. Vision, by contrast, can only return coordinates, a spot on the screen, which the engine clicks blindly with a low-level mouse move. This is an honest weakness of the vision path and a large part of why it is the last resort: clicking a raw coordinate is only correct if the right window is in front, whereas clicking a real element is correct regardless. The preferred path is always the one that hands back a real element.
+
+After acting, the engine checks that the action actually did something rather than assuming it landed. And before it acts at all, the FIND beat has a safety branch: if none of the tiers could find the target, the engine does not push forward and type into thin air. It stops and asks whether to retry, in case you just needed to open the app, or skip the step, or stop the run. That single branch is the difference between an agent that fumbles forward when the world is not as it expected and one that pauses and asks a human, which is the whole safety posture of the project.
+
+### The overlay and approving without stealing focus
+
+For a human to stay in the loop, they have to see what the agent is about to do, and approving must not disturb the target application. So before each action the engine draws a transparent, always-on-top red box exactly around the target element's screen rectangle, labelled with what it is about to do, and then waits. Approval comes through a global hotkey, Enter to approve and Escape to reject, captured system-wide so that pressing it does not pull keyboard focus away from the app that is about to be acted on. This detail is not cosmetic: an earlier version asked for approval through the terminal, and typing the answer there stole focus, so the subsequent keystrokes landed in the wrong window. The global hotkey fixes that at the root.
+
+### One design decision worth its own paragraph: serializable state only
+
+Because the state machine checkpoints itself to disk after every step, everything it carries in its state has to be serializable, plain strings and numbers and lists. Early on the engine tried to stash a live window handle in the state so it could refocus that window later, and the whole thing crashed on save because a live automation object cannot be written to disk. The fix is a good general rule for any checkpointed system: never keep live objects in the state, keep a plain identifier, the window's title as a string, and look the live object up again when you actually need it. Store the ticket, not the thing.
+
+### Two ways to see, one switch
+
+Vision is the last-resort tier, and it can run two ways behind a single switch. The default is the local Ollama model, fully private and offline, which is perfect when it works but is slow and occasionally inconsistent on a CPU-only laptop. The alternative is a hosted vision API, and the adapter supports Claude, OpenAI, and Gemini, auto-detecting which one to use from the shape of the key you provide and normalizing every provider's different response into the same small JSON the rest of the engine expects. There is no universal vision API, so this is built as a small registry of per-provider adapters; adding a fourth provider is one adapter function and one detection rule. The point of the switch is that the same architecture serves everyone: privacy-first users stay local, users without a capable machine drop in an API key and get fast, reliable vision, and the fallback tier keys off the recorded coordinates either way. A subtle but important framing lives in the vision prompt itself: by the time a step reaches vision, the element's name has already failed every earlier tier, so the model is not asked to find the element by name, it is asked whether there is a clickable element at the center of the crop taken around the recorded coordinates. The location is the signal at that tier, not the label.
+
+**What a real replay looks like.** The engine has been driven end to end on a multi-step workflow: it found each target through the accessibility tree, drew the red box, waited for approval, and assembled a full sentence into a text editor across several separate approved steps, clicking and typing exactly where intended. The browser path has been proven filling a real search box on a live page through Playwright. The vision path has been proven both locally and through the Claude API, correctly identifying a menu bar from a screenshot in about three seconds and clicking it. Every route the locator can take, desktop, browser, and vision, has been exercised on real targets, with a human approving each move.
+
+
 ## Roadmap
 
 Phases 1 through 3 are done: the agent can record, understand, and plan. What remains:
