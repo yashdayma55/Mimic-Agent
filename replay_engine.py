@@ -7,6 +7,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 import sqlite3
 from typing import TypedDict
 from locator import locate
+from correction import handle_correction
 
 
 # ---- global hotkey approval fallback: Enter=approve, Esc=reject ----
@@ -59,7 +60,6 @@ def find_node(state):
         print("   (type step - no element to find)")
         state["found"] = True
         return state
-
     got = locate(step)
     state["found"] = got[0] is not None
     if got[0] == "BROWSER":
@@ -106,15 +106,18 @@ def act_node(state):
     if not state["approved"]:
         print("   >>> SKIPPED (rejected)")
         return state
-
     step = state["plan"][state["step_index"]]
+
+    # a correction may have marked this step to be skipped
+    if step.get("_skip"):
+        print("   >>> SKIPPED (corrected to skip)")
+        return state
 
     if step["action"] == "type":
         text = step["text"]
         if text.startswith("[SECRET"):
             print(f"   >>> would type a secret ({text}) - skipping in test")
             return state
-
         # browser step -> fill via playwright
         got = locate(step) if step.get("elem_name") else (None, None)
         if got and got[0] == "BROWSER":
@@ -124,7 +127,6 @@ def act_node(state):
                 return state
             except Exception:
                 pass
-
         # desktop typing
         _refocus_last_target(state)
         send_keys(text, with_spaces=True)
@@ -133,17 +135,14 @@ def act_node(state):
 
     # ---- click ----
     got = locate(step)
-
     if got[0] == "BROWSER":
         got[2]["element"].click()
         print(f"   >>> CLICKED '{step.get('elem_name')}' via BROWSER (playwright)")
-
     elif got[0] == "VISION":
         import pyautogui
         res = got[2]
         pyautogui.click(res["x"], res["y"])
         print(f"   >>> CLICKED at ({res['x']},{res['y']}) via VISION (tier 5)")
-
     elif got[0]:
         el, tier = got[0], got[1]
         try:
@@ -156,10 +155,8 @@ def act_node(state):
             state["last_window_title"] = el.top_level_parent().window_text()
         except Exception:
             pass
-
     else:
         print(f"   >>> could not find {step.get('elem_name','?')}")
-
     return state
 
 
@@ -195,7 +192,6 @@ graph.add_node("missing", missing_node)
 graph.add_node("approve", approve_node)
 graph.add_node("act", act_node)
 graph.add_node("advance", advance_node)
-
 graph.set_entry_point("find")
 graph.add_conditional_edges("find", after_find)
 graph.add_conditional_edges("missing", after_missing)
@@ -208,11 +204,11 @@ checkpointer = SqliteSaver(conn)
 app = graph.compile(checkpointer=checkpointer)
 
 
-# ---- a tiny SAFE test plan: click into Notepad, then type ----
+# ---- a tiny SAFE test plan: click into Notepad, then type (try correcting step 2!) ----
 test_plan = [
     {"step": 1, "instruction": "Click into Notepad text area", "action": "click",
      "elem_name": "Text editor", "elem_type": "Document"},
-    {"step": 2, "instruction": "Type hello", "action": "type", "text": "hello mimicagent"},
+    {"step": 2, "instruction": "Type a greeting", "action": "type", "text": "original text"},
 ]
 
 config = {"configurable": {"thread_id": "test-run-1"}}
@@ -220,7 +216,7 @@ state = {"plan": test_plan, "step_index": 0, "done": False,
          "approved": False, "last_window_title": "",
          "found": False, "missing_choice": "", "target_rect": []}
 
-print("=== Starting replay ===")
+print("=== Starting replay (Phase 5: type a sentence to CORRECT a step) ===")
 result = app.invoke(state, config=config)
 
 while True:
@@ -230,7 +226,6 @@ while True:
     interrupts = snapshot.tasks[0].interrupts if snapshot.tasks else []
     if not interrupts:
         break
-
     info = interrupts[0].value
 
     if "problem" in info:
@@ -241,20 +236,40 @@ while True:
             choice = "stop"
         result = app.invoke(Command(resume=choice), config=config)
     else:
-        # approve-action interrupt: draw the visual overlay box, then wait for hotkey
+        # approve-action interrupt: show overlay box, then approve / reject / CORRECT
         print(f"\n>>> About to: {info['about_to_do']}")
-        rect = snapshot.values.get("target_rect") or []
+        rect =[]
+        answer = None
         if rect:
             try:
                 from overlay import approve_with_overlay
                 answer = approve_with_overlay(tuple(rect), info["about_to_do"])
             except Exception as e:
-                print(f"    (overlay failed: {e}, using hotkey)")
-                print("    Press ENTER to approve, ESC to reject...")
-                answer = wait_for_hotkey()
-        else:
-            print("    Press ENTER to approve, ESC to reject...")
-            answer = wait_for_hotkey()
+                print(f"    (overlay failed: {e})")
+                answer = None
+
+        # if the overlay didn't return a clear approve/reject, fall to the terminal,
+        # which ALSO accepts a typed natural-language correction
+        if answer not in ("approve", "reject"):
+            raw = input("    [Enter]=approve | type a correction | 'skip'=reject: ").strip()
+            if raw == "":
+                answer = "approve"
+            elif raw.lower() in ("skip", "reject", "no"):
+                answer = "reject"
+            else:
+                # a natural-language correction
+                idx = snapshot.values["step_index"]
+                step = snapshot.values["plan"][idx]
+                edit, echo = handle_correction(step, raw)
+                print(f"    {echo}")
+                if edit is None:
+                    continue                       # not understood - loop asks again
+                if edit["edit"] == "skip":
+                    answer = "reject"
+                else:
+                    app.update_state(config, {"plan": snapshot.values["plan"]})
+                    answer = "approve"
+
         print(f"    decision: {answer}")
         result = app.invoke(Command(resume=answer), config=config)
 
