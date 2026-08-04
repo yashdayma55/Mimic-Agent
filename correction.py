@@ -15,7 +15,7 @@ from vision_api import detect_provider
 ALLOWED_EDITS = {"change_text", "skip", "retarget", "insert_before", "unknown"}
 
 # which interpreter to use: "local" (ollama, private/offline) or "api" (fast/reliable)
-INTERPRET_PROVIDER = "api"
+INTERPRET_PROVIDER = "local"
 
 
 # =====================================================================
@@ -79,7 +79,7 @@ def _parse_edit(raw):
         return {"edit": "unknown", "_error": "could not parse"}
 
 
-def interpret_local(step, sentence, model="qwen3:1.7b"):
+def interpret_local(step, sentence, model="qwen2.5:3b"):
     prompt = INTERPRET_PROMPT.format(step_json=json.dumps(step), sentence=sentence)
     try:
         resp = ollama.chat(model=model, think=False, keep_alive="30m",
