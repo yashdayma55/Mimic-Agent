@@ -8,6 +8,7 @@ import sqlite3
 from typing import TypedDict
 from locator import locate
 from correction import handle_correction
+from memory import open_memory, remember, recall
 
 
 # ---- global hotkey approval fallback: Enter=approve, Esc=reject ----
@@ -25,8 +26,10 @@ def wait_for_hotkey():
     return decision["answer"]
 
 
-# ---- the shared state that flows through every node ----
-# Everything here must be serializable (str/int/bool/list/dict) - no live objects.
+# ---- correction memory: one shared store open for the whole run ----
+mem = open_memory("corrections.db")
+
+
 class ReplayState(TypedDict):
     plan: list
     step_index: int
@@ -35,23 +38,20 @@ class ReplayState(TypedDict):
     last_window_title: str
     found: bool
     missing_choice: str
-    target_rect: list          # [L, T, R, B] of the element to highlight
+    target_rect: list
 
 
 def _refocus_last_target(state):
-    """Re-find the last target window by its title and bring it to the front."""
     title = state.get("last_window_title")
     if not title:
         return
     try:
-        win = Desktop(backend="uia").window(title=title)
-        win.set_focus()
+        Desktop(backend="uia").window(title=title).set_focus()
         print("   (refocused target window)")
     except Exception:
         pass
 
 
-# ---- NODE: find the element for the current step ----
 def find_node(state):
     step = state["plan"][state["step_index"]]
     print(f"\n[FIND] step {state['step_index']+1}: {step['instruction']}")
@@ -67,7 +67,7 @@ def find_node(state):
     elif got[0] == "VISION":
         print("   found via vision (tier 5)")
         res = got[2]
-        state["target_rect"] = [res["x"] - 50, res["y"] - 20, res["x"] + 50, res["y"] + 20]
+        state["target_rect"] = [res["x"]-50, res["y"]-20, res["x"]+50, res["y"]+20]
     elif got[0]:
         print(f"   found via tier {got[1]}")
         try:
@@ -80,19 +80,16 @@ def find_node(state):
     return state
 
 
-# ---- NODE: element missing - STOP and ask the human what to do ----
 def missing_node(state):
     step = state["plan"][state["step_index"]]
     answer = interrupt({
         "problem": f"Could not find '{step.get('elem_name','?')}' for step {state['step_index']+1}",
-        "question": "retry / skip / stop?"
-    })
+        "question": "retry / skip / stop?"})
     print(f"   human chose: {answer}")
     state["missing_choice"] = answer
     return state
 
 
-# ---- NODE: pause and ask the human to approve the action ----
 def approve_node(state):
     step = state["plan"][state["step_index"]]
     answer = interrupt({"about_to_do": step["instruction"], "question": "approve?"})
@@ -101,14 +98,12 @@ def approve_node(state):
     return state
 
 
-# ---- NODE: perform the action (click or type), respecting the decision ----
 def act_node(state):
     if not state["approved"]:
         print("   >>> SKIPPED (rejected)")
         return state
     step = state["plan"][state["step_index"]]
 
-    # a correction may have marked this step to be skipped
     if step.get("_skip"):
         print("   >>> SKIPPED (corrected to skip)")
         return state
@@ -118,7 +113,6 @@ def act_node(state):
         if text.startswith("[SECRET"):
             print(f"   >>> would type a secret ({text}) - skipping in test")
             return state
-        # browser step -> fill via playwright
         got = locate(step) if step.get("elem_name") else (None, None)
         if got and got[0] == "BROWSER":
             try:
@@ -127,22 +121,20 @@ def act_node(state):
                 return state
             except Exception:
                 pass
-        # desktop typing
         _refocus_last_target(state)
         send_keys(text, with_spaces=True)
         print(f'   >>> TYPED "{text}"')
         return state
 
-    # ---- click ----
     got = locate(step)
     if got[0] == "BROWSER":
         got[2]["element"].click()
-        print(f"   >>> CLICKED '{step.get('elem_name')}' via BROWSER (playwright)")
+        print(f"   >>> CLICKED '{step.get('elem_name')}' via BROWSER")
     elif got[0] == "VISION":
         import pyautogui
         res = got[2]
         pyautogui.click(res["x"], res["y"])
-        print(f"   >>> CLICKED at ({res['x']},{res['y']}) via VISION (tier 5)")
+        print(f"   >>> CLICKED at ({res['x']},{res['y']}) via VISION")
     elif got[0]:
         el, tier = got[0], got[1]
         try:
@@ -160,7 +152,6 @@ def act_node(state):
     return state
 
 
-# ---- NODE: advance to the next step ----
 def advance_node(state):
     state["step_index"] += 1
     if state["step_index"] >= len(state["plan"]):
@@ -168,24 +159,17 @@ def advance_node(state):
     return state
 
 
-# ---- routing functions (conditional edges) ----
 def after_find(state):
     return "approve" if state["found"] else "missing"
 
 def after_missing(state):
-    choice = state["missing_choice"]
-    if choice == "retry":
-        return "find"
-    elif choice == "skip":
-        return "advance"
-    else:
-        return END
+    c = state["missing_choice"]
+    return "find" if c == "retry" else "advance" if c == "skip" else END
 
 def more_steps(state):
     return "find" if not state["done"] else END
 
 
-# ---- build the graph ----
 graph = StateGraph(ReplayState)
 graph.add_node("find", find_node)
 graph.add_node("missing", missing_node)
@@ -204,11 +188,11 @@ checkpointer = SqliteSaver(conn)
 app = graph.compile(checkpointer=checkpointer)
 
 
-# ---- a tiny SAFE test plan: click into Notepad, then type (try correcting step 2!) ----
 test_plan = [
     {"step": 1, "instruction": "Click into Notepad text area", "action": "click",
      "elem_name": "Text editor", "elem_type": "Document"},
-    {"step": 2, "instruction": "Type a greeting", "action": "type", "text": "original text"},
+    {"step": 2, "instruction": "Type a greeting", "action": "type",
+     "elem_name": "Email", "text": "original text"},
 ]
 
 config = {"configurable": {"thread_id": "test-run-1"}}
@@ -216,7 +200,7 @@ state = {"plan": test_plan, "step_index": 0, "done": False,
          "approved": False, "last_window_title": "",
          "found": False, "missing_choice": "", "target_rect": []}
 
-print("=== Starting replay (Phase 5: type a sentence to CORRECT a step) ===")
+print("=== Starting replay (Phase 5: correction + memory) ===")
 result = app.invoke(state, config=config)
 
 while True:
@@ -229,48 +213,54 @@ while True:
     info = interrupts[0].value
 
     if "problem" in info:
-        # missing-element interrupt (terminal for the 3-way choice)
         print(f"\n!!! {info['problem']}")
         choice = input("    retry / skip / stop: ").strip().lower()
         if choice not in ("retry", "skip", "stop"):
             choice = "stop"
         result = app.invoke(Command(resume=choice), config=config)
     else:
-        # approve-action interrupt: show overlay box, then approve / reject / CORRECT
         print(f"\n>>> About to: {info['about_to_do']}")
-        rect =[]
-        answer = None
-        if rect:
-            try:
-                from overlay import approve_with_overlay
-                answer = approve_with_overlay(tuple(rect), info["about_to_do"])
-            except Exception as e:
-                print(f"    (overlay failed: {e})")
-                answer = None
 
-        # if the overlay didn't return a clear approve/reject, fall to the terminal,
-        # which ALSO accepts a typed natural-language correction
-        if answer not in ("approve", "reject"):
-            raw = input("    [Enter]=approve | type a correction | 'skip'=reject: ").strip()
-            if raw == "":
-                answer = "approve"
-            elif raw.lower() in ("skip", "reject", "no"):
-                answer = "reject"
+        # ---- MEMORY: before asking, check for a remembered correction ----
+        idx = snapshot.values["step_index"]
+        step = snapshot.values["plan"][idx]
+        past, remembered_edit = recall(mem, step)
+        if remembered_edit:
+            print(f"    [memory] last time on a step like this you chose: {remembered_edit['edit']}")
+            print(f"    [memory] (press 'm' to apply that remembered correction)")
+
+        raw = input("    [Enter]=approve | type a correction | 'm'=remembered | 'skip'=reject: ").strip()
+
+        if raw == "":
+            result = app.invoke(Command(resume="approve"), config=config)
+
+        elif raw.lower() in ("skip", "reject", "no"):
+            result = app.invoke(Command(resume="reject"), config=config)
+
+        elif raw.lower() == "m" and remembered_edit:
+            # apply the remembered correction
+            from correction import apply_edit
+            echo = apply_edit(step, remembered_edit)
+            print(f"    {echo}  (from memory)")
+            if remembered_edit["edit"] == "skip":
+                result = app.invoke(Command(resume="reject"), config=config)
             else:
-                # a natural-language correction
-                idx = snapshot.values["step_index"]
-                step = snapshot.values["plan"][idx]
-                edit, echo = handle_correction(step, raw)
-                print(f"    {echo}")
-                if edit is None:
-                    continue                       # not understood - loop asks again
-                if edit["edit"] == "skip":
-                    answer = "reject"
-                else:
-                    app.update_state(config, {"plan": snapshot.values["plan"]})
-                    answer = "approve"
+                app.update_state(config, {"plan": snapshot.values["plan"]})
+                result = app.invoke(Command(resume="approve"), config=config)
 
-        print(f"    decision: {answer}")
-        result = app.invoke(Command(resume=answer), config=config)
+        else:
+            # a fresh natural-language correction
+            edit, echo = handle_correction(step, raw)
+            print(f"    {echo}")
+            if edit is None:
+                continue
+            # ---- MEMORY: remember this correction for the future ----
+            remember(mem, step, edit)
+            if edit["edit"] == "skip":
+                result = app.invoke(Command(resume="reject"), config=config)
+            else:
+                app.update_state(config, {"plan": snapshot.values["plan"]})
+                result = app.invoke(Command(resume="approve"), config=config)
 
 print("\n=== Done ===")
+mem.close()
