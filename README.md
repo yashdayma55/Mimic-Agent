@@ -334,6 +334,9 @@ flowchart TB
     style LOOP fill:#fafafa,stroke:#9e9e9e,stroke-width:2px
 ```
 
+Reading the diagram top to bottom: the run starts from the distilled plan and enters the loop, which repeats the same five beats for every step. The green FIND box locates the target with the five-tier locator. The yellow diamond then asks whether it was found: if not, flow branches left to the orange MISSING box, which stops and asks you to retry, skip, or stop; if yes, flow continues down to the pink APPROVE box, where a red box is drawn on screen and the agent waits for your keypress without stealing focus. Approval leads into the blue ACT box, which clicks, types, or fills, and then into the blue ADVANCE box, which saves a checkpoint and moves to the next step. The dotted retry arrow loops MISSING back to FIND, and the whole cycle repeats until the plan is done. The shape that matters is that nothing acts until it has been found, shown, and approved, in that order.
+
+
 The reason this is a state machine and not a plain loop is the pausing. A human stops the agent, looks at the box, maybe thinks for a minute, then approves. The agent must be able to freeze at that exact point, hold everything, and pick up cleanly when the answer comes. The state machine is built with LangGraph, whose interrupt mechanism does exactly this: a node can pause the whole graph, hand a question out to the human, and resume from that spot when the answer arrives. Every step also writes a checkpoint to a small SQLite file, so a run that is stopped halfway can be resumed later from the right step rather than started over.
 
 ### Finding the target: the five-tier self-healing locator
@@ -395,6 +398,9 @@ flowchart TB
     style VISION fill:#f6f3fc,stroke:#7e57c2,stroke-width:2px
 ```
 
+Following this diagram from the top: a step that needs its target enters the yellow decision, which asks whether it is a browser step. If it is, flow goes left into the blue browser path, where Playwright searches inside the live web page. If it is not, flow goes right into the grey desktop path, where the five tiers are tried in order from top to bottom, each falling through to the next only on a miss: exact role and name, then automation id, then name alone, then a constrained fuzzy match, and finally vision. The purple vision box at the bottom of the desktop path draws on the swappable vision backends shown on the right, either the local model or a hosted API. Every path, whether it exits from the browser box, one of the four desktop tiers, or vision, converges on the same dark box at the bottom: a target the engine can act on. The single idea the picture encodes is first the cheap and reliable methods, and only then the expensive last resort.
+
+
 The clearest way to think about the tiers is finding a friend in a crowd. First you look for their face, which is the most reliable signal. That is Tier 1: match the element by both its role and its exact name, the Button actually named Submit. If that fails, you look for the bright jacket they told you they would wear, a stable identifier, which is Tier 2 matching on the developer-assigned automation id. If that fails you match on name alone regardless of type, Tier 3, since sometimes an app reports the same label under a different control type than expected. If that still fails, Tier 4 tries a fuzzy partial-name match, and if all the semantic tiers come up empty, Tier 5 falls back to actually looking at the screen with the vision model. A dumb macro only ever knows the last resort, the exact spot you agreed to meet, which is why it breaks the moment anything moves.
 
 Tier 4, the fuzzy match, taught a real lesson and is worth calling out. The first version simply looked for any on-screen element whose name contained the search text. On a real screen that is dangerous: a code editor and a chat window both display arbitrary text, and searching for a short label happily matched a whole paragraph of source code or a message that merely contained the word. The fix was to constrain Tier 4 to short, genuinely interactive controls only, buttons and menu items and fields, and to require the found name to be close in length to what was searched for. A real button label is short; a paragraph that happens to contain the word is not. Constraining the fuzzy tier this way is the difference between self-healing and self-sabotage.
@@ -422,13 +428,95 @@ Vision is the last-resort tier, and it can run two ways behind a single switch. 
 **What a real replay looks like.** The engine has been driven end to end on a multi-step workflow: it found each target through the accessibility tree, drew the red box, waited for approval, and assembled a full sentence into a text editor across several separate approved steps, clicking and typing exactly where intended. The browser path has been proven filling a real search box on a live page through Playwright. The vision path has been proven both locally and through the Claude API, correctly identifying a menu bar from a screenshot in about three seconds and clicking it. Every route the locator can take, desktop, browser, and vision, has been exercised on real targets, with a human approving each move.
 
 
+---
+
+## Phase 5 in detail: correction and memory
+
+Phase 4 gave you an agent you could approve or reject, one step at a time. That is a light switch. Phase 5 turns it into a conversation. When the agent is about to do the wrong thing, you type a plain sentence, "use my other email here", "skip the cover letter", "the field is actually called Username", and it understands you, fixes that one step, tells you what it understood, continues, and remembers the fix so it never makes the same mistake again. This is the difference between a recorded macro, which repeats blindly, and an agent, which takes correction in natural language and adapts.
+
+The whole phase hangs off one new choice at the approval pause. Before Phase 5, that pause had two exits: approve and reject. Phase 5 adds a third, correct, and a memory that turns a one-time fix into a permanent lesson.
+
+```mermaid
+flowchart TB
+    PAUSE(["replay paused at a step,<br/>waiting for your approval"]):::start
+
+    subgraph MEMCHECK["before asking - check memory"]
+        direction TB
+        RC["recall: have I been corrected<br/>on a step like this before?"]:::mem
+        SUG["if yes, SUGGEST it<br/>'last time you chose change_text'"]:::mem
+        RC --> SUG
+    end
+
+    CHOICE{{"what do you do?"}}:::gate
+    APP["ENTER<br/>approve as planned"]:::ok
+    REJ["'skip'<br/>reject the step"]:::ok
+    MEMK["'m'<br/>apply the remembered fix"]:::mem
+    CORR["TYPE a correction<br/>'type my gmail instead'"]:::corr
+
+    subgraph PIPE["the correction pipeline"]
+        direction TB
+        I1["INTERPRET (local 3B LLM or API)<br/>sentence -> structured edit"]:::llm
+        I2["VALIDATE against a closed menu<br/>change_text / skip / retarget / unknown"]:::llm
+        I3["APPLY to the step + ECHO<br/>'ok, I'll type your gmail instead'"]:::act
+        I1 --> I2 --> I3
+    end
+
+    REM["REMEMBER: embed the situation<br/>+ store the edit (sqlite-vec)"]:::mem
+    RESUME["RESUME from the fixed step"]:::act
+
+    PAUSE --> MEMCHECK --> CHOICE
+    CHOICE -->|approve| APP
+    CHOICE -->|reject| REJ
+    CHOICE -->|remembered| MEMK
+    CHOICE -->|correct| CORR
+    CORR ==> PIPE ==> REM ==> RESUME
+    MEMK -.-> RESUME
+    APP -.-> RESUME
+    REM -.saves for next run.-> RC
+
+    classDef start fill:#263238,color:#fff,stroke:#000,stroke-width:2px
+    classDef gate fill:#fff8e1,color:#795548,stroke:#ffca28,stroke-width:1.5px
+    classDef ok fill:#e8f5e9,color:#1b5e20,stroke:#66bb6a,stroke-width:1.5px
+    classDef corr fill:#fce4ec,color:#880e4f,stroke:#ec407a,stroke-width:1.5px
+    classDef llm fill:#ede7f6,color:#311b92,stroke:#7e57c2,stroke-width:1.5px
+    classDef act fill:#e3f2fd,color:#0d47a1,stroke:#42a5f5,stroke-width:1.5px
+    classDef mem fill:#e0f2f1,color:#004d40,stroke:#26a69a,stroke-width:1.5px
+
+    style MEMCHECK fill:#e8f6f4,stroke:#26a69a,stroke-width:2px
+    style PIPE fill:#f6f3fc,stroke:#7e57c2,stroke-width:2px
+```
+
+Reading this diagram: a paused step first enters the teal memory-check block, where the agent asks whether it has been corrected on a step like this before and, if so, surfaces a suggestion. Flow then reaches the yellow decision, which now has four exits instead of two. The two green boxes are the familiar approve and reject. The teal box is the new remembered-fix shortcut, applied with a single keypress. The pink box is the new path: you type a correction, which flows into the purple pipeline, where it is interpreted into a structured edit, validated against a closed menu, and applied to the step with a plain-language echo. From there flow reaches the teal REMEMBER box, which embeds the situation and stores the edit, and then RESUME, which continues from the fixed step. The dotted arrow from REMEMBER back up to the recall box is the loop that matters: what gets saved on this run is exactly what gets suggested on the next.
+
+
+### The principle that governs the whole phase
+
+One idea explains almost every choice below: the language model proposes, the engine disposes. A language model is powerful but unreliable, it can hallucinate, return malformed output, or misread what you meant. So the model is never allowed to drive an action directly. It only ever produces a proposal, a small structured edit chosen from a fixed menu, which the engine then validates, echoes back to you, and only then applies. A probabilistic component is kept safely wrapped inside a deterministic one. Everything that follows is downstream of that principle.
+
+### Turning a sentence into a safe edit
+
+When you type a correction, the first job is translation: a plain sentence has to become something the engine can act on. That is a language-model task, so a small local text model reads the step the agent is about to perform together with your sentence, and returns one edit from a closed menu: change the text, skip the step, retarget to a differently-named element, or, if the sentence does not clearly map to any of those, unknown. The menu is deliberately small and fixed. An open-ended "edit the plan however you like" would be impossible to validate and easy to corrupt; a closed menu means the engine knows every possible output and can check each one. After the model answers, a validation gate confirms the edit is well-formed, a change_text actually carries new text, a retarget actually carries a name, and anything that fails, including unknown, becomes a graceful "I did not understand, please rephrase" rather than a corrupted step. Only then is the edit applied to the step, and the agent echoes back what it understood in plain words before doing anything, the way a good waiter repeats an order. If the readback is wrong, you correct again; the loop simply repeats.
+
+A lesson worth recording lived in the model size. The first interpreter used a very small 1.7B model, and it was not reliable, it misread "type X instead" as a retargeting and cheerfully turned nonsense into text to type. Moving up to a 3B model fixed it: the same four test corrections that a 1.7B got half wrong, the 3B got completely right, matching a hosted API model. So correction interpretation stayed local and offline, keeping the project's core promise intact, with the same hosted-API option available behind a switch for anyone who wants it, the identical swappable-provider pattern the vision tier uses. The general lesson: when a small model is not accurate enough, the fix is often not "go to the cloud", it is "right-size the local model".
+
+Because the correction only changes data inside the step, and the plan is just ordinary serializable data living in the graph's state, resuming after a correction reuses Phase 4's machinery exactly. The edited step is already checkpointed; resuming makes the engine act on the corrected values. There is no separate "correction mode", a correction is just editing the step and then resuming the same pause as if approved. This is the payoff of how Phase 4 was built: Phase 5 is mostly data-editing plus reuse, not new engine plumbing.
+
+### Remembering the fix
+
+Applying a correction once is useful. Remembering it is what makes the agent feel like it learns. So after a correction is applied, MimicAgent stores it, but the clever part is what it stores it under. It does not file the correction under your exact sentence, because next time there will be no sentence yet, only a step. Instead it builds a short description of the step's situation, "type text into the Email field", and turns that description into an embedding: a list of numbers that places similar meanings near each other. That vector, paired with the edit, goes into a local vector store built on sqlite-vec, which is just the same SQLite the whole project already uses, taught to search by meaning. No server, no new process, one file on disk, fully offline, exactly the project's philosophy.
+
+On every future run, before asking you about a step, the agent embeds that step's situation and asks the store whether anything close is on file. If a past correction is near enough, it surfaces it as a suggestion, "last time on a step like this you chose to change the text", and offers to apply it with a single keypress. Note the deliberate restraint: it suggests, it does not silently auto-apply. A remembered correction applied blindly in the wrong context would be a silent error, so the human stays in the loop, consistent with the whole approval-first design.
+
+Getting "near enough" right needed real calibration. The distances the vector store returns are not on a tidy zero-to-one scale; measured against a stored correction for the Email field, an identical step scored zero, a similar "Contact Email" field scored about nine, a merely related "Username" field about fifteen, and an unrelated "Submit" button about twenty-two. Those numbers are beautifully ordered, closer meaning really does mean a smaller distance, and they revealed a clean gap. A threshold around ten recalls the genuinely similar email fields while correctly ignoring the unrelated button. That single number is the line between a helpful memory and a noisy one, and it is a knob you tune by looking at real distances rather than guessing.
+
+**What a real correction-and-memory loop looks like.** In a two-run test the agent was about to type the wrong thing into a field. On the first run I typed a plain correction; it interpreted the sentence with the local 3B model, echoed back what it understood, typed the corrected text, and quietly remembered the fix. On the second run, at the same kind of step, it announced on its own that it had been corrected here before and offered the remembered fix; one keypress applied it, with no need to type the correction again. Interrupt, interpret, validate, apply, echo, remember, and on the next run, recall, suggest, apply. That is the whole loop, and it is the moment MimicAgent stopped repeating and started learning.
+
 ## Roadmap
 
-Phases 1 through 4 are done: the agent can record, understand, plan, and replay. What remains:
+Phases 1 through 5 are done: the agent can record, understand, plan, replay, and learn from correction. What remains:
 
-- **Phase 5 - Correction memory**: pause a replay mid-run, tell the agent in plain words what to change, and have it interpret the instruction, patch that step, and continue, saving the correction into a local vector store so the lesson is remembered on future runs.
 - **Phase 6 - MCP server**: expose learned workflows as tools other agents can call.
-- **Phase 7 - Evaluation and packaging**: a benchmark for success rate and human interventions, a saved workflow library so many recorded workflows can be kept and re-run like a history, and a self-bootstrapping installer with hardware-aware model selection.
+- **Phase 7 - Evaluation, settings, and packaging**: a benchmark for success rate and human interventions; a saved workflow library so many recorded workflows can be kept and re-run like a history; a settings system for provider (local or API), an optional reasoning mode that an API key unlocks, and hardware-aware model-size selection; and a self-bootstrapping installer.
 
 ## Tech stack
 
