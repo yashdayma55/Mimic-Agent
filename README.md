@@ -511,11 +511,79 @@ Getting "near enough" right needed real calibration. The distances the vector st
 
 **What a real correction-and-memory loop looks like.** In a two-run test the agent was about to type the wrong thing into a field. On the first run I typed a plain correction; it interpreted the sentence with the local 3B model, echoed back what it understood, typed the corrected text, and quietly remembered the fix. On the second run, at the same kind of step, it announced on its own that it had been corrected here before and offered the remembered fix; one keypress applied it, with no need to type the correction again. Interrupt, interpret, validate, apply, echo, remember, and on the next run, recall, suggest, apply. That is the whole loop, and it is the moment MimicAgent stopped repeating and started learning.
 
+---
+
+## Phase 6 in detail: the MCP server
+
+Phases 1 through 5 built an agent you operate. You record a task, it plans and replays it, and you correct it when it is wrong. Phase 6 asks a different question. What if MimicAgent did not have to be driven by a human pressing a button, but could be called by another AI. That is what this phase adds. MimicAgent publishes its learned workflows as tools that a reasoning agent such as Claude or GPT can call, so the reasoning agent decides what needs doing and MimicAgent does the actual clicking and typing on the local machine. The large model brings the thinking, MimicAgent brings the ability to operate real desktop software that has no interface of its own to call. Together they do what neither can do alone.
+
+The mechanism is a protocol called MCP, the Model Context Protocol. It is a shared language that lets an AI assistant call external tools, one common shape that any assistant can plug into, the way one cable shape replaced a drawer full of adapters. A program that speaks this protocol as a server can offer its abilities to any assistant that speaks it as a client. In Phase 6 MimicAgent becomes that server.
+
+```mermaid
+flowchart TB
+    subgraph BRAIN["a reasoning agent (Claude, GPT, ...) the BRAIN"]
+        A1["decides WHAT to do<br/>'file these 10 expense reports'"]:::brain
+    end
+
+    subgraph MCP["MCP the universal adapter"]
+        M1["MimicAgent runs an MCP SERVER"]:::mcp
+        M2["publishes learned workflows<br/>as callable tools"]:::mcp
+        M1 --> M2
+    end
+
+    subgraph HANDS["MimicAgent replay engine the HANDS"]
+        H1["actually operates the desktop app<br/>(clicks, types, no API needed)"]:::hands
+        H2["human still approves<br/>(safety preserved)"]:::human
+        H1 --> H2
+    end
+
+    RESULT(["the local app is driven,<br/>result reported back"]):::start
+
+    BRAIN ==>|"calls a tool<br/>run_workflow(name, data)"| MCP
+    MCP ==>|"invokes the workflow"| HANDS
+    HANDS ==> RESULT
+    RESULT -.reports back.-> BRAIN
+
+    classDef brain fill:#ede7f6,color:#311b92,stroke:#7e57c2,stroke-width:1.5px
+    classDef mcp fill:#fff8e1,color:#795548,stroke:#ffca28,stroke-width:1.5px
+    classDef hands fill:#e3f2fd,color:#0d47a1,stroke:#42a5f5,stroke-width:1.5px
+    classDef human fill:#fff3e0,color:#e65100,stroke:#ff9800,stroke-width:1.5px
+    classDef start fill:#263238,color:#fff,stroke:#000,stroke-width:2px
+
+    style BRAIN fill:#f6f3fc,stroke:#7e57c2,stroke-width:2px
+    style MCP fill:#fffdf5,stroke:#ffca28,stroke-width:2px
+    style HANDS fill:#f3f9ff,stroke:#42a5f5,stroke-width:2px
+```
+
+Reading the diagram from the top, the purple brain is a reasoning agent that decides what needs doing and calls a tool, run_workflow with a name and some data. That call travels through the yellow MCP adapter in the middle, which is the server MimicAgent now runs and which publishes each learned workflow as a callable tool. From there the call reaches the blue hands, which are the replay engine from the earlier phases, and inside those hands the human still approves, so safety is preserved even though the request came from a machine. The dark box is the outcome, the local app is driven and a short result is produced, and the dotted arrow carries that result back up to the brain. The single idea the picture encodes is a clean division of labour, thinking on one side, doing on the other, with the protocol as the wire between them.
+
+### The principle that governs the phase
+
+One idea shapes every choice here. MimicAgent is a capability, not a decision maker. When another agent calls it, MimicAgent does not judge whether the task is wise, it does not invent new steps, and it does not drop the human approval that keeps it safe. It exposes only the workflows a human already taught and approved, and it runs them the same careful way no matter who did the calling. The calling agent supplies intent and data, MimicAgent supplies reliable, demonstrated execution. Keeping that line bright is what makes it safe to let other software reach into your desktop.
+
+### Server, not client
+
+There are two roles in this protocol, and they point in opposite directions. A client is the assistant that wants to use tools. A server is the program that offers them. This is worth pausing on, because in the earlier phases MimicAgent was always a client. When it called a vision API or a correction API, it was phoning out to place an order, which is why those calls used a plain HTTP client library and not a web framework. Phase 6 is the reverse. MimicAgent now answers the phone, so it genuinely needs a server, and this is the one place in the project where a server library is the right tool. The work is handled by a small server framework built for this protocol, so the code only has to describe its tools and what they do, and the framework takes care of the message format underneath.
+
+### Exposing whole workflows, never raw clicks
+
+A tool in this protocol is a function with a name, a description, and typed inputs, published so an agent can call it. MimicAgent exposes three, a health check, a list of the workflows it knows, and a run tool that takes a workflow name and some data. The important decision is what is deliberately not exposed. MimicAgent publishes whole named workflows, not primitive actions like click at this position or type this text. Handing an outside agent raw control would let it do anything at all on the machine, which is both unsafe and a betrayal of the demonstration based reliability the whole project is built on. Exposing only named workflows means an outside agent can invoke exactly what a human already taught and approved, and nothing more. The data argument carries the values to fill in, so one workflow can serve many cases, this job or that job, with different data each time. The descriptions matter too, because they are what the calling agent reads to understand each tool, so they are written for the agent, plain and precise.
+
+### Safety, and who approves when a machine calls
+
+When a human runs MimicAgent, that human approves each step. The natural worry is what happens to that approval when the caller is another agent. The answer that keeps the project safe is that the human still approves by default. A call from an outside agent starts a workflow, but the same per step approval from the replay engine still stands between intention and action, the way a person at a drive through window still hands over the order even though a car placed it. Running without that approval is possible only for workflows the user has explicitly marked as trusted for unattended use, and never by default. The rejected alternative, letting any calling agent run anything unattended, would turn a careful assistant into an unsupervised robot with full control of the desktop, which is exactly the outcome the project exists to avoid.
+
+### A lesson from the wire
+
+Building this surfaced a sharp and instructive constraint. The protocol, when it runs over the standard input and output streams, owns those streams for its own messages. The first version of the run tool printed its progress and asked for approval the normal way, and the whole thing broke, because every printed line and every prompt was landing in the channel the protocol was trying to parse as its own structured messages. The fix taught the rule cleanly. A server speaking over these streams must send all of its own logging to the separate error stream, and it cannot ask for typed input at all, because there is no terminal on the other end. That is not just a bug fix, it is the reason the safety design lands where it does. Interactive terminal approval cannot travel down this wire, so a workflow triggered by another agent runs only if the user pre trusted it, and any richer approval has to come through a separate channel such as a graphical prompt. The constraint and the safety model are two views of the same fact.
+
+**What a real call looks like.** In an end to end test a separate program connected to MimicAgent as a client, discovered the tools it offered, asked which workflows existed, and then called the run tool by name. MimicAgent loaded that named workflow and drove the desktop, typing into a real application, and returned a short summary saying the workflow completed. A call that originated in one program reached across the protocol and moved the mouse and keyboard of a real machine, with the workflow either pre trusted or a human still in the loop. That is the whole phase, MimicAgent turned from an app you operate into a pair of hands a smarter agent can direct.
+
+
 ## Roadmap
 
-Phases 1 through 5 are done: the agent can record, understand, plan, replay, and learn from correction. What remains:
+Phases 1 through 6 are done: the agent can record, understand, plan, replay, learn from correction, and be called by other agents. What remains:
 
-- **Phase 6 - MCP server**: expose learned workflows as tools other agents can call.
 - **Phase 7 - Evaluation, settings, and packaging**: a benchmark for success rate and human interventions; a saved workflow library so many recorded workflows can be kept and re-run like a history; a settings system for provider (local or API), an optional reasoning mode that an API key unlocks, and hardware-aware model-size selection; and a self-bootstrapping installer.
 
 ## Tech stack
