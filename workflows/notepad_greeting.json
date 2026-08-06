@@ -1,0 +1,6 @@
+[
+  {"step": 1, "instruction": "Click into Notepad text area", "action": "click",
+   "elem_name": "Text editor", "elem_type": "Document"},
+  {"step": 2, "instruction": "Type a greeting", "action": "type",
+   "elem_name": "Text editor", "text": "hello from an MCP call"}
+]
