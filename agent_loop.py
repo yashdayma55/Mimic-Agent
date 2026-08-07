@@ -15,14 +15,30 @@ try:
 except Exception:
     pass
 
-from set_of_mark import build_marked_screenshot
+from set_of_mark import collect_clickable_elements, grab_full_screen, draw_marks
+
+try:
+    from som_redact import redact_image
+except Exception:
+    redact_image = None
 
 
 def perceive(save_path="agent_view.png"):
-    """PERCEIVE: capture the screen as a numbered element list + marked image.
-    Returns (elements, image_path). This is what the model 'sees' each turn."""
-    elements, path = build_marked_screenshot(save_path=save_path)
-    return elements, path
+    """PERCEIVE: capture the screen as a numbered element list + marked image,
+    REDACTING sensitive fields (passwords, cards, etc.) before the image is saved
+    or sent to the model - same safety as Stage A. Returns (elements, image_path)."""
+    elements = collect_clickable_elements()
+    img, ox, oy, scale = grab_full_screen()
+    for el in elements:
+        el["sx"] = int((el["cx"] - ox) * scale)
+        el["sy"] = int((el["cy"] - oy) * scale)
+    # 1. black out sensitive regions BEFORE marking/sending
+    if redact_image:
+        img = redact_image(img, elements, ox, oy)
+    # 2. then draw the numbered marks
+    annotated = draw_marks(img, elements, ox, oy, scale)
+    annotated.save(save_path)
+    return elements, save_path
 
 
 def describe_perception(elements):

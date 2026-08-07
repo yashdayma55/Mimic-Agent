@@ -131,6 +131,45 @@ def _launch(candidates, wait=3):
     return False
 
 
+def focus_app(proc_names, title_hint=None):
+    """Bring an app's window to the foreground so perception sees the RIGHT window.
+    Tries by process -> window title. Returns True if a window was focused."""
+    try:
+        import win32gui, win32process, win32con
+    except Exception:
+        return False
+
+    targets = [pn.lower() for pn in proc_names]
+    found = {"hwnd": None}
+
+    def enum_cb(hwnd, _):
+        if not win32gui.IsWindowVisible(hwnd):
+            return
+        try:
+            _, pid = win32process.GetWindowThreadProcessId(hwnd)
+            if psutil is None:
+                return
+            pname = psutil.Process(pid).name().lower()
+            title = win32gui.GetWindowText(hwnd)
+            if pname in targets and title.strip():
+                if (title_hint is None) or (title_hint.lower() in title.lower()):
+                    found["hwnd"] = hwnd
+        except Exception:
+            pass
+
+    win32gui.EnumWindows(enum_cb, None)
+    if found["hwnd"]:
+        try:
+            win32gui.ShowWindow(found["hwnd"], win32con.SW_RESTORE)
+            win32gui.SetForegroundWindow(found["hwnd"])
+            import time; time.sleep(0.6)
+            print(f"   focused the {proc_names[0]} window")
+            return True
+        except Exception as e:
+            print(f"   could not focus window: {e}")
+    return False
+
+
 def ensure_capability(name):
     """Detect + provide one capability. Returns True when ready."""
     cap = CAPABILITIES.get(name)
@@ -172,7 +211,12 @@ def prepare_for(goal=None, steps=None):
     print(f"   the model says this task needs: {needed}")
     results = []
     for cap in needed:
-        results.append((cap, ensure_capability(cap)))
+        ready = ensure_capability(cap)
+        # bring the app to the foreground so the agent perceives the RIGHT window
+        if ready:
+            capdef = CAPABILITIES.get(cap, {})
+            focus_app(capdef.get("procs", []))
+        results.append((cap, ready))
     return results
 
 

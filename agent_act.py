@@ -15,6 +15,7 @@ try:
 except Exception:
     pass
 
+import time
 import pyautogui
 from pywinauto.keyboard import send_keys
 
@@ -27,9 +28,23 @@ def _coerce_id(val):
         return None
 
 
-def do_action(action, elements):
+def _refocus_target(target_procs):
+    """Re-focus the target app window right before acting, because the terminal
+    approval prompt steals focus back to PowerShell. Beats that focus-steal."""
+    if not target_procs:
+        return
+    try:
+        from prereq_reasoner import focus_app
+        focus_app(target_procs)
+    except Exception:
+        pass
+
+
+def do_action(action, elements, target_procs=None):
     """Perform one action dict. Returns (ok, message)."""
     kind = action.get("action")
+
+    _refocus_target(target_procs)
 
     if kind == "click":
         eid = _coerce_id(action.get("id"))
@@ -41,8 +56,27 @@ def do_action(action, elements):
 
     if kind == "type":
         text = action.get("text", "")
+        # Click into the main editable text area first (Document/Edit), so keys
+        # land in the body rather than after a tab/title click left focus elsewhere.
+        editables = [e for e in elements if e.get("control_type") in ("Document", "Edit")]
+        if editables:
+            def _area(el):
+                L, T, R, B = el["rect"]
+                return max(0, R - L) * max(0, B - T)
+            target = max(editables, key=_area)
+            pyautogui.click(target["cx"], target["cy"])
+            time.sleep(0.2)
+        # type_mode controls where the text lands (fixes typing-mid-text bug):
+        #   'replace' (default) -> Ctrl+A then type, so the field's contents are replaced
+        #   'append'            -> Ctrl+End then type, so text is added at the end
+        #   'as-is'             -> type wherever the cursor is
+        mode = action.get("type_mode", "replace")
+        if mode == "replace":
+            send_keys("^a")
+        elif mode == "append":
+            send_keys("^{END}")
         send_keys(text, with_spaces=True)
-        return True, f'typed "{text}"'
+        return True, f'typed "{text}" (mode={mode})'
 
     if kind == "press":
         key = action.get("key", "").lower()

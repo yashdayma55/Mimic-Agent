@@ -48,9 +48,9 @@ The screen has numbered red boxes on every clickable element. Here they are:
 {hist}
 
 Decide the SINGLE next action to move toward the goal. Do not plan ahead, just
-the one next action. Respond with ONLY a JSON object, one of:
+the one next action. To type text, prefer clicking the main editable text AREA (a Document or Edit element) rather than a tab or title, then use the type action. For typing, use type_mode "replace" to overwrite a field (default for form fields) or "append" to add to existing text. Respond with ONLY a JSON object, one of:
 {{"action":"click","id":<number>,"why":"<short>"}}
-{{"action":"type","text":"<text>","why":"<short>"}}
+{{"action":"type","text":"<text>","type_mode":"<replace|append>","why":"<short>"}}
 {{"action":"press","key":"<enter|tab|esc|...>","why":"<short>"}}
 {{"action":"scroll","direction":"<up|down>","why":"<short>"}}
 {{"action":"done","why":"the goal is already satisfied"}}
@@ -74,8 +74,17 @@ the one next action. Respond with ONLY a JSON object, one of:
         r.raise_for_status()
         raw = r.json()["content"][0]["text"]
         action = json.loads(raw[raw.find("{"): raw.rfind("}") + 1])
-        if action.get("action") not in ALLOWED_ACTIONS:
-            return {"action": "stuck", "why": f"unknown action {action.get('action')}"}
+        act = action.get("action")
+        # gracefully map common near-misses to the closed vocabulary
+        alias = {"key": "press", "keypress": "press", "keyboard": "press",
+                 "click_element": "click", "tap": "click", "input": "type",
+                 "enter": "press", "finish": "done", "complete": "done"}
+        if act in alias:
+            action["action"] = alias[act]
+            act = alias[act]
+        if act not in ALLOWED_ACTIONS:
+            # show what the model actually returned so we can see the real shape
+            return {"action": "stuck", "why": f"unrecognized action shape: {action}"}
         return action
     except Exception as e:
         return {"action": "stuck", "why": f"error: {e}"}
