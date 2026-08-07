@@ -85,8 +85,8 @@ def locate(step, verbose=True):
 
     # ---- TIER 5: vision fallback (local Ollama or API) ----
     try:
-        from vision_locator import locate_with_vision
-        result = locate_with_vision(step, verbose=verbose)
+        from som_locator import locate_with_som
+        result = locate_with_som(step, verbose=verbose)
         if result.get("found"):
             log(f"Tier 5 hit (vision): {result.get('what_you_see')}")
             return "VISION", 5, result       # coords-based result, engine clicks x,y
