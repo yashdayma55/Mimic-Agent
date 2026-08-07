@@ -11,6 +11,20 @@ Step 1 proves the numbering is correct: we enumerate on-screen elements, draw
 labelled boxes, and save an annotated image so we can eyeball it.
 """
 
+# --- make the WHOLE process fully DPI-aware BEFORE importing mss/pywinauto ---
+# On high-DPI Windows the accessibility tree reports physical pixels; if mss
+# captures a scaled buffer, boxes land wrong. Forcing per-monitor DPI awareness
+# up front makes the screenshot and the tree share ONE coordinate system, so no
+# scale conversion is needed (scale stays 1.0 and coordinates match directly).
+import ctypes
+try:
+    ctypes.windll.shcore.SetProcessDpiAwareness(2)   # PROCESS_PER_MONITOR_DPI_AWARE
+except Exception:
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()    # older fallback
+    except Exception:
+        pass
+
 import io
 import mss
 from PIL import Image, ImageDraw, ImageFont
@@ -68,16 +82,20 @@ def collect_clickable_elements(window_title=None, max_elems=60):
 
 
 def grab_full_screen():
-    """Screenshot the whole (primary) screen as a PIL image + its offset."""
+    """Screenshot the ENTIRE virtual desktop (all monitors = monitors[0]).
+    Elements can live on a second monitor whose coordinates extend past the
+    primary width, so we must capture the whole virtual screen and use its
+    (left, top) origin as the offset. Process is DPI-aware so scale is 1.0."""
     with mss.mss() as sct:
-        mon = sct.monitors[1]           # primary monitor
+        mon = sct.monitors[0]           # 0 = full virtual desktop (all monitors)
         shot = sct.grab(mon)
         img = Image.frombytes("RGB", (shot.width, shot.height), shot.rgb)
-    return img, mon["left"], mon["top"]
+    return img, mon["left"], mon["top"], 1.0
 
 
-def draw_marks(img, elements, offset_x=0, offset_y=0):
-    """Draw a numbered box on each element. Returns the annotated image."""
+def draw_marks(img, elements, offset_x=0, offset_y=0, scale=1.0):
+    """Draw a numbered box on each element. Applies the DPI scale so boxes land
+    on the right place even when the screenshot is scaled vs the tree coords."""
     annotated = img.copy()
     draw = ImageDraw.Draw(annotated)
     try:
@@ -87,7 +105,9 @@ def draw_marks(img, elements, offset_x=0, offset_y=0):
 
     for el in elements:
         L, T, R, B = el["rect"]
-        L -= offset_x; R -= offset_x; T -= offset_y; B -= offset_y
+        # tree coords -> screenshot pixels: subtract offset, then apply scale
+        L = int((L - offset_x) * scale); R = int((R - offset_x) * scale)
+        T = int((T - offset_y) * scale); B = int((B - offset_y) * scale)
         # the box
         draw.rectangle([L, T, R, B], outline=(255, 0, 0), width=2)
         # the number label with a filled background so it's readable
@@ -100,11 +120,16 @@ def draw_marks(img, elements, offset_x=0, offset_y=0):
 
 def build_marked_screenshot(window_title=None, save_path="marked.png"):
     """The full step-1 pipeline: collect elements, screenshot, draw marks, save.
-    Returns (elements, saved_path)."""
+    Returns (elements, saved_path). Also stores each element's screenshot-pixel
+    center (sx, sy) so a later click maps exactly."""
     elements = collect_clickable_elements(window_title)
-    img, ox, oy = grab_full_screen()
-    annotated = draw_marks(img, elements, ox, oy)
+    img, ox, oy, scale = grab_full_screen()
+    for el in elements:
+        el["sx"] = int((el["cx"] - ox) * scale)   # center in screenshot pixels
+        el["sy"] = int((el["cy"] - oy) * scale)
+    annotated = draw_marks(img, elements, ox, oy, scale)
     annotated.save(save_path)
+    print(f"   (dpi scale = {scale:.3f}; screenshot {img.size})")
     return elements, save_path
 
 
