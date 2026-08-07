@@ -21,9 +21,17 @@ import ollama
 
 # ---- CONFIG: which vision backend to use ----
 # "local"  -> Ollama qwen3-vl:2b (private, offline, slower on CPU)
-# "api"    -> a third-party vision API (fast, needs a key)
-VISION_PROVIDER = "local"
-API_KEY = ""          # user fills this in to use the "api" provider
+# "api"    -> a third-party vision API (fast, needs a key in my_key.txt)
+VISION_PROVIDER = "api"
+
+
+def _load_key():
+    """Read the API key from my_key.txt (gitignored). Returns '' if missing."""
+    try:
+        with open("my_key.txt", "r", encoding="utf-8") as f:
+            return f.read().strip()
+    except Exception:
+        return ""
 
 
 def grab_screen_region(cx, cy, box=400):
@@ -44,9 +52,8 @@ def grab_screen_region(cx, cy, box=400):
     return buf.getvalue()
 
 
-# ---- PROVIDER 1: local Ollama vision (your Phase 2 approach) ----
+# ---- PROVIDER 1: local Ollama vision (Phase 2 approach) ----
 def _ask_local(image_bytes, target_desc):
-    
     prompt = """Look at the CENTER of this cropped screenshot. Is there a clickable UI element there (a button, menu, link, icon, or field)?
     Respond ONLY with JSON: {"found": true/false, "what_you_see": "what the element is", "confidence": "high/medium/low"}
     Set found=true if there is any clickable element near the center."""
@@ -59,17 +66,19 @@ def _ask_local(image_bytes, target_desc):
     return resp["message"]["content"]
 
 
-# ---- PROVIDER 2: third-party API (opt-in fast lane) ----
+# ---- PROVIDER 2: third-party API (opt-in fast lane) - NOW WIRED to vision_api.py ----
 def _ask_api(image_bytes, target_desc):
-    # Placeholder for a hosted vision API (Claude / OpenAI / Gemini).
-    # The user supplies API_KEY; we'd base64 the image and POST it here.
-    # Kept as a clear stub so the switch works end-to-end; real HTTP call wired when a key is set.
-    if not API_KEY:
-        return '{"found": false, "what_you_see": "no API key set", "confidence": "low"}'
-    # import base64, requests
-    # b64 = base64.b64encode(image_bytes).decode()
-    # ... POST to the provider with API_KEY, return the text ...
-    return '{"found": false, "what_you_see": "api provider not yet implemented", "confidence": "low"}'
+    """Call the real hosted vision API via vision_api.ask_vision_api (proven working).
+    Loads the key from my_key.txt. Returns a JSON string (to match _ask_local)."""
+    key = _load_key()
+    if not key:
+        return '{"found": false, "what_you_see": "no API key in my_key.txt", "confidence": "low"}'
+    try:
+        from vision_api import ask_vision_api
+        result = ask_vision_api(image_bytes, key)   # returns a dict {found, what_you_see, confidence}
+        return json.dumps(result)
+    except Exception as e:
+        return json.dumps({"found": False, "what_you_see": f"api error: {e}", "confidence": "low"})
 
 
 def _parse(raw):
@@ -114,7 +123,6 @@ def locate_with_vision(step, verbose=True):
 
 # ---- standalone test ----
 if __name__ == "__main__":
-    # test against Notepad's text area coordinates (adjust to your screen)
     test_step = {"elem_name": "Text editor", "instruction": "the notepad text area",
                  "x": 900, "y": 500}
     print("Testing Tier 5 vision locator...")
