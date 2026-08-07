@@ -1,23 +1,30 @@
 """
-A non-interactive entry point to run a plan programmatically.
-Reuses the Phase 4 locator and action logic, but instead of an interactive
-LangGraph loop with terminal approval, it exposes a plain function that runs
-a list of steps and returns (ran, skipped).
+Non-interactive entry point to run a plan programmatically.
+Reuses the Phase 4 locator/action logic.
 
-This is what the MCP server / workflow_runner calls. It keeps the interactive
-replay_engine.py separate (that one is for a human at a terminal).
+Phase 7 robustness fix: when a step FAILS (element not found), the engine does
+NOT blindly continue - that is what caused a single failure to cascade and break
+every following step. Instead it PAUSES and asks the human what to do:
+   retry / skip / stop / correct
+so a failure is contained instead of poisoning the rest of the run.
 
-Approval: when require_approval is True, it asks on the terminal per step
-(simple y/n). An MCP server running unattended would pass require_approval=False
-only for user-trusted workflows.
+IMPORTANT for MCP: under MCP stdio, stdout is the protocol channel, so logging
+goes to stderr and interactive prompts are not used (pass on_fail='skip').
+
+  run_plan(steps, require_approval=True, on_fail='ask') -> (ran, skipped)
 """
 
+import sys
 from pywinauto import Desktop
 from pywinauto.keyboard import send_keys
 from locator import locate
 
 
 _last_window_title = {"title": ""}
+
+
+def log(msg):
+    print(msg, file=sys.stderr, flush=True)
 
 
 def _refocus(title):
@@ -30,33 +37,36 @@ def _refocus(title):
 
 
 def _do_step(step):
-    """Perform one step. Returns 'done' or 'skipped'."""
+    """Perform one step. Returns 'done' or 'failed'."""
     if step.get("_skip"):
-        return "skipped"
+        return "done"          # deliberately skipped, not a failure
 
     action = step.get("action")
 
     if action == "type":
         text = step.get("text", "")
         if text.startswith("[SECRET"):
-            print(f"   (skipping secret field {text})")
-            return "skipped"
+            log(f"   (skipping secret field {text})")
+            return "done"
         _refocus(_last_window_title["title"])
         send_keys(text, with_spaces=True)
-        print(f'   typed "{text}"')
+        log(f'   typed "{text}"')
         return "done"
 
     # click
     got = locate(step)
     if got[0] == "BROWSER":
         got[2]["element"].click()
-        print(f"   clicked '{step.get('elem_name')}' (browser)")
+        log(f"   clicked '{step.get('elem_name')}' (browser)")
         return "done"
     elif got[0] == "VISION":
-        import pyautogui
         res = got[2]
+        if not res.get("found"):
+            log(f"   vision could not confirm '{step.get('elem_name','?')}'")
+            return "failed"
+        import pyautogui
         pyautogui.click(res["x"], res["y"])
-        print(f"   clicked at ({res['x']},{res['y']}) (vision)")
+        log(f"   clicked at ({res['x']},{res['y']}) (vision)")
         return "done"
     elif got[0]:
         el, tier = got[0], got[1]
@@ -65,44 +75,93 @@ def _do_step(step):
         except Exception:
             pass
         el.click_input()
-        print(f"   clicked '{step.get('elem_name','?')}' (tier {tier})")
+        log(f"   clicked '{step.get('elem_name','?')}' (tier {tier})")
         try:
             _last_window_title["title"] = el.top_level_parent().window_text()
         except Exception:
             pass
         return "done"
     else:
-        print(f"   could not find '{step.get('elem_name','?')}'")
-        return "skipped"
+        log(f"   could not find '{step.get('elem_name','?')}'")
+        return "failed"
 
 
-def run_plan(steps, require_approval=True):
-    """Run a list of steps. Returns (ran, skipped) lists of instructions."""
+def _handle_failure(step, on_fail):
+    """A step failed. Decide what to do. Returns one of:
+    'retry', 'skip', 'stop'. In 'ask' mode, prompt the human."""
+    instr = step.get("instruction", step.get("action", "step"))
+
+    if on_fail == "skip":
+        return "skip"          # non-interactive: just skip and keep going
+    if on_fail == "stop":
+        return "stop"
+
+    # on_fail == 'ask' : pause and ask the human, so a failure doesn't cascade
+    log(f"\n   !!! step FAILED: {instr}")
+    print(f"\n   step failed: {instr}", flush=True)
+    ans = input("   what now? (retry / skip / stop): ").strip().lower()
+    if ans.startswith("r"):
+        return "retry"
+    if ans.startswith("st"):
+        return "stop"
+    return "skip"
+
+
+def run_plan(steps, require_approval=True, on_fail="ask"):
+    """Run steps. Returns (ran, skipped).
+    on_fail controls what happens when a step can't find its element:
+      'ask'  -> pause and ask the human (default, interactive)
+      'skip' -> skip the failed step and continue (non-interactive/MCP)
+      'stop' -> stop the whole run at the first failure
+    The key robustness idea: a failure is handled explicitly, not ignored,
+    so it cannot silently cascade into every following step."""
     ran, skipped = [], []
-    for step in steps:
+    i = 0
+    while i < len(steps):
+        step = steps[i]
         instr = step.get("instruction", step.get("action", "step"))
-        print(f"\n[step] {instr}")
+        log(f"\n[step {i+1}/{len(steps)}] {instr}")
 
         if require_approval:
-            ans = input(f"   approve this step? (y/n): ").strip().lower()
+            ans = input(f"   approve this step? (y/n/stop): ").strip().lower()
+            if ans == "stop":
+                log("   stopping the run.")
+                break
             if ans != "y":
-                print("   skipped (not approved)")
+                log("   skipped (not approved)")
                 skipped.append(instr)
+                i += 1
                 continue
 
         outcome = _do_step(step)
-        (ran if outcome == "done" else skipped).append(instr)
+
+        if outcome == "done":
+            ran.append(instr)
+            i += 1
+        else:
+            # a failure - handle it, do NOT just march on
+            decision = _handle_failure(step, on_fail)
+            if decision == "retry":
+                log("   retrying...")
+                continue            # same i, try the step again
+            elif decision == "stop":
+                log("   stopping the run so the failure doesn't cascade.")
+                skipped.append(instr)
+                break
+            else:  # skip
+                log("   skipping this step (you chose to continue).")
+                skipped.append(instr)
+                i += 1
 
     return ran, skipped
 
 
 if __name__ == "__main__":
-    # quick self-test on the seed workflow
     from workflow_runner import load_workflow
     steps = load_workflow("notepad_greeting")
     if steps:
-        print("running notepad_greeting (open Notepad first)...")
-        ran, skipped = run_plan(steps, require_approval=True)
-        print(f"\ndone: {ran}\nskipped: {skipped}")
+        log("running notepad_greeting (open Notepad first)...")
+        ran, skipped = run_plan(steps, require_approval=True, on_fail="ask")
+        log(f"\ndone: {ran}\nskipped: {skipped}")
     else:
-        print("no seed workflow found")
+        log("no seed workflow found")
