@@ -1,18 +1,32 @@
 # MimicAgent
 
-MimicAgent is a desktop agent that learns a computer workflow by watching you do it once, and then does it for you.
+MimicAgent is a reasoning-driven desktop agent. You describe a task in plain language, and it looks at the screen, works out the steps itself, and carries them out with you approving along the way, on native Windows apps and in the browser. It can also learn a task you demonstrate once and run it later with less supervision.
 
-There is no scripting and no prompting. You press a Learn button, you go through your task the way you normally would, and the agent watches quietly in the background. It notices where you click, what you type, and which actual interface element you touched at each step. When you are done it turns that recording into a plan written in plain language that you can read and edit. Later you press Play, feed it a new input, and it walks through the same workflow, stopping at every step to show you what it is about to do and waiting for your go-ahead. If it gets a step wrong you stop it, tell it what went wrong in normal words, and it fixes that step and remembers the fix so it does not make the same mistake again.
+It started as a record-and-replay tool: do a task once, and it plays the exact clicks back. It has grown well past that. The heart of it now is a reasoning loop. You can hand it a goal it has never seen ("search google for python", "open the View menu and close it"), and with no recording at all it perceives the current screen, decides one action at a time, does it, checks what changed, and continues until the goal is met. The record-and-replay ability is still there, but it is now one mode among several, and even a trained task is run adaptively rather than blindly.
 
-The whole thing runs on your own machine. No cloud, no API keys, no per-token cost. It is built to stay light enough to run on an ordinary 16GB laptop without turning the fans on.
+The difference from an ordinary macro recorder is understanding. A recorder remembers where you clicked and breaks the instant a window moves. MimicAgent reads the real interface (the browser's DOM, or the Windows accessibility tree), picks elements by meaning, and re-reasons a step when the screen has changed. A recorder remembers where you clicked; MimicAgent understands what you are trying to do.
 
-The example I built it around is my own job hunt. The workflow is: find a recruiter who is hiring on LinkedIn, pull their email through a browser extension, draft an outreach message and a resume tailored to the role, and save everything into a folder named after the company. That is a tedious loop I run over and over, which makes it the perfect thing to hand to an agent. Nothing about the design is specific to job applications though. Any repetitive multi step desktop task fits the same mold.
+MimicAgent is offline-capable and online-optional. Local models are the private default, so a task can run with no cloud and no per-token cost. An optional API key unlocks a stronger reasoning path for the harder work, which is what makes the agent genuinely useful on modest hardware where small local models are not enough on their own. It is built to run on an ordinary 16GB, CPU-only laptop.
+
+The example I built it around is my own job hunt: find a recruiter hiring on LinkedIn, pull their email through a browser extension, draft an outreach message and a tailored resume, and save it all into a folder named after the company. That tedious loop is a natural fit for an agent. Nothing about the design is specific to job applications though; any bounded multi-step desktop or browser task fits the same mold.
+
+## Two modes, and when each one wins
+
+MimicAgent keeps both approaches on purpose, because they are good at different things.
+
+**Record-and-replay is better when** the task is on a stable native desktop app whose layout does not change, when it is long and highly repetitive and you want the same deterministic steps every run, when you want it to run entirely offline and free, and when the steps are exact and unambiguous. Replay leans on the fast accessibility-tree tiers and only reaches for a model on a genuine miss, so a recorded task can run with no API calls at all. Its strength is determinism and cost; its weakness is brittleness, because it assumes the screen looks the way it did when you recorded it.
+
+**The reasoning agent is better when** the task is in the browser (web pages barely expose themselves to the accessibility tree, so recorded browser workflows tend to be a string of unlabeled panes that break; the agent perceives the page's real DOM live and handles it far better), when the screen changes between runs, when there is a choice to make among several similar options, when you want to describe a task you never recorded, and when the task is short and benefits from judgment more than exact repetition. Its strength is flexibility and understanding; its cost is that it reasons each step and is subject to the real reliability limits of computer-use agents today, which is exactly why the human stays in the loop.
+
+**The hybrid, train-then-run,** is where the two meet. Run a task once with approval, save the verified steps as hints, and on later runs the agent follows those hints when the live screen still matches and re-reasons a step when it has changed. This gives the predictability of replay with the resilience of reasoning, and it is the recommended path for a task you repeat on a page that shifts a little each time.
+
+Rule of thumb: native, stable, exact, offline, repetitive leans toward record-and-replay; browser, changing, ambiguous, or described-not-recorded leans toward the reasoning agent; repeated on a slightly-changing page leans toward train-then-run.
 
 ## Why I built it the way I did
 
 Most tools that automate a screen do it by remembering pixel positions. Click at x=340, y=220. That breaks the instant a window moves or a page reflows, which on a real website is constantly. So MimicAgent does not lead with pixels. It leads with the accessibility tree, which is the structured description of the interface that the operating system already keeps for screen readers. When you click a button, Windows already knows it is a button named "Connect", and I can read that in a couple of milliseconds without looking at a single pixel. That semantic information is what makes a recording survive into tomorrow, when the layout has shifted slightly but the button named "Connect" is still called "Connect".
 
-Vision only comes in as a backup. Some apps draw their own interface onto a blank canvas and expose nothing to the accessibility tree. For those cases, and only those, a local vision model looks at a screenshot and finds the element. Keeping the slow, heavy vision step off the main path is the entire reason this can run offline on a normal laptop instead of needing a datacenter GPU.
+Vision only comes in as a backup. Some apps draw their own interface onto a blank canvas and expose nothing to the accessibility tree. For those cases, and only those, a vision step looks at a screenshot and finds the element, by marking the clickable things with numbers and letting a model pick a number rather than guess a coordinate. Keeping the slow, heavy vision step off the main path is a large part of why this can run on a normal laptop instead of needing a datacenter GPU. The vision and reasoning steps can run locally for privacy, or against a stronger hosted model when an API key is provided; the structured accessibility-first path is what keeps either one fast.
 
 ## The big picture
 
@@ -91,15 +105,29 @@ The green Learn block is four listeners running at once while you work. Everythi
 
 ## Where the project is right now
 
-Three phases are built and working, in order.
+The core is complete and proven end to end, across the original demonstration phases and the later autonomy stages.
+
+Foundation, learn by demonstration:
 
 - **Phase 1 - Recorder** (done): captures any workflow to a local database.
-- **Phase 2 - Local vision** (done): understands screenshots offline and identifies UI elements as structured data.
+- **Phase 2 - Local vision** (done): understands screenshots and identifies UI elements as structured data.
 - **Phase 3 - Distillation** (done): turns a raw recording into a readable, editable, security-conscious plan.
+- **Phase 4 - Replay engine** (done): executes the plan with a five-tier self-healing locator, an approval overlay, and checkpointing.
+- **Phase 5 - Correction and memory** (done): plain-language corrections at each step, remembered so similar steps recall the fix.
+- **Phase 6 - MCP server** (done): exposes learned workflows as callable tools for other agents, human approval preserved.
+- **Phase 7 - Library and settings** (done): named workflows managed as files, a launcher, a settings file, run logging.
 
-So today MimicAgent can already **watch** a task, **understand** what is on screen, and **plan** the workflow as clean steps. What remains is the replay engine that executes the plan, the correction loop that learns from feedback, and packaging. Those are described in the roadmap at the end.
+Autonomy, reason toward a goal:
 
-Each finished phase is walked through in detail below.
+- **Stage A - Adaptive replay** (done): Set-of-Mark grounding as the vision tier; never guess a coordinate, mark the screen and pick a number, cache the adaptation.
+- **Stage B - Goal-driven loop** (done): from a plain-language goal, perceive, reason one action, act, observe, repeat, with a human approving.
+- **Stage C - Reasoning-based prerequisites** (done): the model reasons what a task needs from a closed capability list; the code launches and focuses it.
+- **Browser DOM perception** (done): real page elements over the Chrome DevTools Protocol, with reliable selector-based clicking and typing.
+- **Train-then-run** (done): verify a task once with approval, save it, run it later adaptively with a pause control.
+
+So today MimicAgent can watch a task, understand what is on screen, plan it, replay it with self-healing, learn from correction, be called by other agents, reason its way through a goal it was never shown, prepare its own environment, and operate the browser through the real DOM. What remains is refinement and packaging, described in the roadmap at the end.
+
+The foundation phases are walked through in detail below, followed by the autonomy stages.
 
 ---
 
@@ -580,28 +608,220 @@ Building this surfaced a sharp and instructive constraint. The protocol, when it
 **What a real call looks like.** In an end to end test a separate program connected to MimicAgent as a client, discovered the tools it offered, asked which workflows existed, and then called the run tool by name. MimicAgent loaded that named workflow and drove the desktop, typing into a real application, and returned a short summary saying the workflow completed. A call that originated in one program reached across the protocol and moved the mouse and keyboard of a real machine, with the workflow either pre trusted or a human still in the loop. That is the whole phase, MimicAgent turned from an app you operate into a pair of hands a smarter agent can direct.
 
 
+---
+
+## Phase 7 in detail: the workflow library, launcher, and settings
+
+The first six phases proved MimicAgent could learn a single task and run it. Phase 7 is the part that turns a capable script into something that feels like an application: a place to keep many named workflows, a friendly front door to pick and run them, a settings file to change behaviour without touching code, and a log so runs can be reviewed later.
+
+```mermaid
+flowchart TB
+    REC(["a recording or a<br/>goal you want to keep"]):::start
+
+    subgraph LIB["THE LIBRARY - named workflows as files"]
+        direction TB
+        SAVE["save under a name<br/>(never silently overwrite)"]:::lib
+        LIST["list / load / rename / delete"]:::lib
+        SPLIT["recorded and trained kept<br/>distinct, shown separately"]:::lib
+        SAVE --> LIST --> SPLIT
+    end
+
+    subgraph LAUNCH["THE LAUNCHER - one friendly front door"]
+        direction TB
+        M1["run a recorded workflow"]:::menu
+        M2["give the agent a goal"]:::menu
+        M3["chat: describe tasks"]:::menu
+        M4["train a workflow"]:::menu
+        M5["run a trained workflow (auto)"]:::menu
+    end
+
+    SET[/"SETTINGS FILE<br/>mode (local/api), model sizes,<br/>step ceiling, approval, key path"/]:::set
+    LOG[("RUN LOG<br/>when, goal, outcome, steps")]:::log
+
+    REC ==> LIB
+    LIB ==> LAUNCH
+    SET -.reads defaults.-> LAUNCH
+    LAUNCH ==> LOG
+
+    classDef start fill:#263238,color:#fff,stroke:#000,stroke-width:2px
+    classDef lib fill:#e3f2fd,color:#0d47a1,stroke:#42a5f5,stroke-width:1.5px
+    classDef menu fill:#e8f5e9,color:#1b5e20,stroke:#66bb6a,stroke-width:1.5px
+    classDef set fill:#fff8e1,color:#795548,stroke:#ffca28,stroke-width:1.5px
+    classDef log fill:#ede7f6,color:#311b92,stroke:#7e57c2,stroke-width:1.5px
+
+    style LIB fill:#f3f9ff,stroke:#42a5f5,stroke-width:2px
+    style LAUNCH fill:#f1f8f2,stroke:#66bb6a,stroke-width:2px
+```
+
+Reading the picture, a recording or a goal you want to keep flows into the blue library, where it is saved under a name (never silently overwriting an existing one) and can be listed, loaded, renamed, or deleted, with recorded and trained workflows kept distinct. The green launcher is the single front door onto all of it, offering the five ways in. The yellow settings file feeds the launcher its defaults without any code change, and every run drops a line into the purple run log. The idea the diagram captures is that many tasks, two modes, one configuration, and a paper trail all sit behind one simple interface.
+
+The library keeps each workflow as a named file rather than in a database. That choice is deliberate. Files on disk are inspectable, easy to back up, easy to hand-edit, and they keep the whole thing offline and transparent, which matches the rest of the project. Saving a workflow refuses to silently overwrite an existing one, so a fresh recording can never quietly clobber a task you already trusted. Listing, loading, renaming, and deleting are all just operations on those files, and a recording is turned into a named library entry when you choose to save it. Because trained workflows and recorded workflows have different shapes, they are kept distinct, so listing recorded workflows never trips over a trained one and each shows up under the right menu.
+
+The launcher is the friendly front door that ties everything together. Running it presents a small menu: run a saved recorded workflow, give the agent a goal in plain language, chat with the agent by describing tasks one after another, train a workflow by approving each step and then saving it, or run a trained workflow with reduced interruption. The point is that the two halves of the project, demonstration and reasoning, sit behind one simple interface, and picking a task to run feels like opening a past chat rather than remembering a command.
+
+The settings live in a single editable file so behaviour can change without editing the code that runs the loop. It holds the reasoning mode, local for the private offline path or api for the stronger hosted path; the local model choices, which can be sized to the hardware; the hosted model id used when the api path is on; the loop safety settings, the step ceiling and whether each action is approved; and where the API key file lives. The loop reads these as its defaults and falls back to safe built-in values if the settings file is missing, so nothing breaks if it is absent.
+
+Finally, every run appends a short line to a local log, recording when it ran, the goal, the outcome, and how many steps it took, wrapped so that logging can never crash a run. Together these pieces are what make MimicAgent usable day to day rather than only demonstrable: many tasks kept and re-run like a history, one clean way in, behaviour tuned in one place, and a paper trail of what happened.
+
+---
+
+## Stage A in detail: adaptive replay with Set-of-Mark
+
+Replay from the earlier phases is strong until the accessibility tree comes up empty and the screen no longer matches the recording. The old last resort was to ask a vision model roughly where the element was, and that drifts, because vision models are built to understand an image, not to output a precise pixel. Stage A replaces guessing with choosing.
+
+```mermaid
+flowchart TB
+    STEP(["a replay step whose element<br/>the tree tiers cannot find"]):::start
+    MEM{"seen this failure before?<br/>(vector memory)"}:::mem
+    REUSE["reuse the remembered<br/>element - free, offline"]:::mem
+    subgraph SOM["SET-OF-MARK (needs a model)"]
+        direction TB
+        MASK["mask sensitive fields"]:::vis
+        MARK["number every clickable element"]:::vis
+        PICK["model picks the NUMBER<br/>(never a coordinate)"]:::vis
+        CENTER["map number to exact centre, click"]:::vis
+        MASK --> MARK --> PICK --> CENTER
+    end
+    CACHE["cache the adaptation<br/>for next time"]:::mem
+    STEP --> MEM
+    MEM -->|yes| REUSE
+    MEM -->|no| SOM
+    SOM --> CACHE
+    REUSE ==> DONE(["element found, act"]):::ok
+    CACHE ==> DONE
+    classDef start fill:#263238,color:#fff,stroke:#000,stroke-width:2px
+    classDef mem fill:#e0f2f1,color:#004d40,stroke:#26a69a,stroke-width:1.5px
+    classDef vis fill:#ede7f6,color:#311b92,stroke:#7e57c2,stroke-width:1.5px
+    classDef ok fill:#e8f5e9,color:#1b5e20,stroke:#66bb6a,stroke-width:1.5px
+    style SOM fill:#f6f3fc,stroke:#7e57c2,stroke-width:2px
+```
+
+Reading it, a step whose element the fast tiers could not find first asks memory whether this exact failure has been seen before; if so, the remembered element is reused with no model call at all. Only on a genuine miss does flow enter the purple Set-of-Mark block, where sensitive fields are masked, every clickable element is numbered, the model picks a number rather than a coordinate, and the code maps that number to an exact centre. The fresh adaptation is cached so the next run recognises it for free, and either path rejoins the act step. The single idea is that guessing is replaced by choosing, and the agent teaches itself to need the model less over time.
+
+The technique is Set-of-Mark grounding, the same idea the strongest desktop-agent systems use. When the fast tiers fail, MimicAgent numbers every clickable element on the screen with a labelled box, hands that marked screenshot to a model, and asks only which number matches the intent. The model answers with a number, and the code maps that number to the exact centre of that element. The hard geometric part moves out of the model and into deterministic code, so the click lands precisely instead of drifting.
+
+An adaptation that took a model call once should not take one again. After a successful pick, the situation and the chosen element are written into a local vector store, so on the next run the same failed step is recognised and handled from memory with no model call at all. The agent gets cheaper and more offline the more it is used. Before any screenshot leaves the machine, sensitive fields are masked, and when nothing can be resolved the agent falls back to the human rather than to a guess.
+
+The governing principle of the stage, in one line: never ask a model to guess a coordinate; give it a numbered menu and let it pick.
+
+## Stage B in detail: the goal-driven loop
+
+This is the stage where MimicAgent stops replaying and starts reasoning. You give a goal in plain language, with no recording, and the agent runs a tight loop: perceive the screen as a numbered menu of elements, ask the model for the single next action, get your approval, act, re-perceive to check what changed, and repeat until the goal is met.
+
+```mermaid
+flowchart TB
+    GOAL(["a plain-language goal"]):::start
+    subgraph LOOP["THE LOOP - one action at a time"]
+        direction TB
+        P["PERCEIVE numbered elements"]:::vis
+        R["REASON one next action<br/>from a closed vocabulary"]:::llm
+        A{"human approves?"}:::gate
+        ACT["ACT (reuse the tools)"]:::act
+        O["OBSERVE - re-perceive, check"]:::vis
+        P --> R --> A
+        A -->|yes| ACT --> O
+        O -->|not done| P
+    end
+    DONE(["goal reached"]):::ok
+    STOP(["reject / ceiling / stuck:<br/>stop safely"]):::human
+    GOAL --> LOOP
+    O -->|done| DONE
+    A -->|no| STOP
+    classDef start fill:#263238,color:#fff,stroke:#000,stroke-width:2px
+    classDef vis fill:#ede7f6,color:#311b92,stroke:#7e57c2,stroke-width:1.5px
+    classDef llm fill:#e8eaf6,color:#1a237e,stroke:#5c6bc0,stroke-width:1.5px
+    classDef gate fill:#fff8e1,color:#795548,stroke:#ffca28,stroke-width:1.5px
+    classDef act fill:#e3f2fd,color:#0d47a1,stroke:#42a5f5,stroke-width:1.5px
+    classDef ok fill:#e8f5e9,color:#1b5e20,stroke:#66bb6a,stroke-width:1.5px
+    classDef human fill:#fff3e0,color:#e65100,stroke:#ff9800,stroke-width:1.5px
+    style LOOP fill:#faf9fe,stroke:#7e57c2,stroke-width:2px
+```
+
+The goal enters the purple loop, which turns until the goal is met. Perceive reads the numbered screen; reason asks the model for one next action from the closed vocabulary; the human approves; act performs it with the existing tools; observe re-perceives and checks. If the goal is not yet met, flow loops back to perceive with the new screen; if it is, flow leaves to the green box. The two escapes matter as much as the loop: a human rejection, a step ceiling, or a stuck signal all lead to the orange safe stop. The shape to hold is a tight cycle that only ever proposes one action at a time and is always gated by a human.
+
+The one rule that keeps this safe and grounded is one action at a time, never a plan swallowed whole. Asking a model for the entire sequence up front is asking it to guess about a future it cannot see, because it does not know how the screen will change after each step. Asking only for the next action, doing it, and looking again keeps the model anchored to the screen that is actually in front of it.
+
+Every action the model can choose comes from a closed vocabulary: click, type, press, scroll, navigate, switch_tab, copy, paste, wait, hotkey, done, and stuck. Because the choice is always from this fixed set, every output is something the engine already knows how to execute and validate, which is what makes it safe to act on a probabilistic model's answer. Clicks are expressed as element numbers, reusing the Set-of-Mark idea, so the model never guesses a coordinate here either. A hard step ceiling and clean stops on done, stuck, rejection, or repeated failure keep a confused run from wandering. At any approval point you can type a correction in plain words, and the agent re-plans that step to follow you.
+
+## Stage C in detail: reasoning-based prerequisites
+
+A task often needs the environment set up before it can begin; a browser task needs a browser open. Rather than hardcoding rules that map keywords to apps, MimicAgent lets the model reason about what a task needs, choosing from a closed list of capabilities the code can actually provide, such as a browser, a browser with remote debugging, or Notepad. The model decides what is needed; the code detects whether it is running, launches it if not, and brings the right window to the foreground.
+
+```mermaid
+flowchart TB
+    GOAL(["a goal that may need an app"]):::start
+    REASON["model reasons what it needs<br/>from a CLOSED capability list<br/>(browser / browser_debug / notepad)"]:::llm
+    CHECK{"is it running?<br/>(psutil)"}:::gate
+    LAUNCH["launch it, then focus<br/>the right window"]:::act
+    READY(["environment ready -<br/>hand off to the loop"]):::ok
+    GOAL --> REASON --> CHECK
+    CHECK -->|no| LAUNCH --> READY
+    CHECK -->|yes| READY
+    classDef start fill:#263238,color:#fff,stroke:#000,stroke-width:2px
+    classDef llm fill:#e8eaf6,color:#1a237e,stroke:#5c6bc0,stroke-width:1.5px
+    classDef gate fill:#fff8e1,color:#795548,stroke:#ffca28,stroke-width:1.5px
+    classDef act fill:#e3f2fd,color:#0d47a1,stroke:#42a5f5,stroke-width:1.5px
+    classDef ok fill:#e8f5e9,color:#1b5e20,stroke:#66bb6a,stroke-width:1.5px
+```
+
+The goal is handed to the model, which reasons about what it needs from the closed capability list, so its answer is always something the code can deliver. The code then checks with psutil whether that capability is already running; if not, it launches it and focuses the right window; either way the environment ends up ready and control passes to the loop. The idea the diagram encodes is the recurring split of the project: the model decides what, the code decides how.
+
+The split is the same one that recurs across the project: the model decides what, the code decides how. Because the model chooses only from capabilities the code can deliver, its answer is always executable. Given a goal about applying on LinkedIn, the model reasons that it needs to control a browser and asks for the debugging-enabled browser; given a goal about writing in Notepad, it asks for Notepad; given a goal that needs no app, it asks for nothing.
+
+## Browser DOM perception: real eyes on the web
+
+Web pages barely expose themselves to the Windows accessibility tree, so for anything in the browser the earlier perception saw mostly unlabelled panes and clicked blindly. This is why recorded browser workflows are brittle. The fix is to perceive the page the way the page actually describes itself: through its DOM, over the Chrome DevTools Protocol, using Playwright.
+
+Now, when the browser is in front, MimicAgent reads the real interactable elements of the page, each with its true label and role, and numbers them the same way as everywhere else. Just as important, browser actions act on the real DOM element rather than on a screen coordinate. A click or a keystroke is sent to the specific element by a stable selector, so it lands where it should instead of missing a moving target. This is what took browser tasks from fumbling to reliable: the agent both sees the page correctly and acts on it precisely, and because it works through the page rather than through simulated screen input, it is far less sensitive to which window happens to be in focus.
+
+## Train-then-run: verify once, then less interruption
+
+The two halves of the project meet here. You can run a task first as a training pass, approving each action, and the verified sequence is saved as a named trained workflow: the goal plus a hint for each step. Running it later re-perceives the live screen at each step and follows the saved hint when it still matches, or re-reasons that step when the screen has changed. There is no per-step approval in this mode, but the safety floor stays: the run stops on the step ceiling, on a step it cannot resolve, or on repeated failure, and a pause control lets you step in at any moment to edit the goal or stop. The approval happened once, up front, when you trained it; later runs trust that verified pattern while still adapting to a screen that shifts.
+
+
 ## Roadmap
 
-Phases 1 through 6 are done: the agent can record, understand, plan, replay, learn from correction, and be called by other agents. What remains:
+The foundation phases and the autonomy stages are done: the agent can record, understand, plan, replay with self-healing, learn from correction, be called by other agents, reason toward a goal it was never shown, prepare its own environment, operate the browser through the real DOM, and be trained once then run adaptively. What remains is refinement rather than new foundations:
 
-- **Phase 7 - Evaluation, settings, and packaging**: a benchmark for success rate and human interventions; a saved workflow library so many recorded workflows can be kept and re-run like a history; a settings system for provider (local or API), an optional reasoning mode that an API key unlocks, and hardware-aware model-size selection; and a self-bootstrapping installer.
+- **Broader testing** across varied tasks to map the real range and catch edge cases.
+- **Smoother browser edge cases**: blank tabs, popups, and extension surfaces.
+- **Graceful teardown** of the browser connection.
+- **Evaluation and packaging**: a benchmark for success rate and human interventions, and a self-bootstrapping installer.
+
+The honest direction is to make the bounded, human-in-the-loop sweet spot as reliable and pleasant as possible, rather than to chase unattended long-horizon autonomy that the field has not yet solved.
+
+## What it is and is not, honestly
+
+MimicAgent is a capable assistant for short, bounded tasks with a human in the loop. It reliably does things like navigating to a page and searching, filling a field, opening a menu, choosing among options on a page, or carrying out a demonstrated sequence that has drifted a little.
+
+It is not an unattended agent for long, multi-application, many-step marathons. That level of autonomy is unreliable even for frontier systems today; published benchmarks on realistic multi-step desktop and web tasks still sit well below human reliability. MimicAgent is deliberately built around a human checkpoint rather than pretending otherwise. The honest sweet spot is a few to a dozen steps within stable applications, with a person able to approve, correct, or stop, and that is genuinely useful.
 
 ## Tech stack
 
-In use today: Python 3.11, pynput, pywinauto on the UIA backend, mss, SQLite in WAL mode, Ollama running a quantized Qwen3-VL, and Pillow for image preparation. Coming in later phases: LangGraph for the replay state machine, Playwright over the Chrome DevTools Protocol for browser control, sqlite-vec with nomic-embed-text for correction memory, PyQt6 for the on-screen overlay, the MCP SDK, and self-hosted Langfuse for tracing.
+Windows 11 and Python throughout, on 16GB RAM and CPU only, no GPU required. Recording and native control use pynput, pywinauto on the UIA backend, and mss, with SQLite in WAL mode as the store. The replay engine is a LangGraph state machine with a PyQt6 approval overlay. Browser perception and action use Playwright over the Chrome DevTools Protocol. The private model path runs on Ollama (a quantized Qwen3-VL for vision, a small Qwen for correction, and nomic-embed-text for embeddings), with sqlite-vec as the vector store for correction and adaptation memory; an optional API key routes the harder reasoning and perception to a stronger hosted model. Learned workflows are served to other agents over MCP. Set-of-Mark grounding provides the vision fallback, and prerequisites are handled with psutil and the Windows window APIs.
 
-## Running what exists
+## Running it
+
+The friendly entry point is the launcher, which ties the two modes together:
 
 ```bash
-# 1. record a workflow (press Esc to stop)
-pip install pynput pywinauto mss
+python mimic.py
+```
+
+It offers: run a saved recorded workflow, give the agent a goal, chat with the agent (describe tasks one after another), train a workflow (approve each step, then save it), and run a trained workflow with reduced interruption.
+
+You can also run a goal directly:
+
+```bash
+python agent_run.py "search google for python"
+```
+
+For browser tasks, Chrome must be running with remote debugging enabled; MimicAgent can detect when it is not and offer to relaunch it in that mode. The original demonstration pipeline is still available on its own:
+
+```bash
+# record a workflow (press Esc to stop)
 python mini_recorder.py
-
-# 2. try local vision on a captured screenshot (needs Ollama + qwen3-vl:2b)
-pip install ollama pillow
-python grounding_test.py
-
-# 3. distill the recording into a readable, editable plan
+# distill the recording into a readable, editable plan
 python distill.py     # writes plan.txt and plan.json
 ```
 
