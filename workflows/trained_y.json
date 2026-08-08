@@ -1,0 +1,79 @@
+{
+  "name": "trained_y",
+  "goal": "search google for python",
+  "trace": [
+    {
+      "action": {
+        "action": "click",
+        "id": 7,
+        "why": "Click on the search box to begin typing the search query"
+      },
+      "signature": {
+        "name": "Search",
+        "control_type": "ComboBox",
+        "position": {
+          "cx": 471,
+          "cy": 317
+        }
+      },
+      "mode": "browser"
+    },
+    {
+      "action": {
+        "action": "type",
+        "text": "python",
+        "type_mode": "replace",
+        "why": "Type 'python' into the search box"
+      },
+      "signature": {
+        "name": "",
+        "control_type": "",
+        "position": null
+      },
+      "mode": "browser"
+    },
+    {
+      "action": {
+        "action": "click",
+        "id": 11,
+        "why": "Click the Google Search button to search for 'python'"
+      },
+      "signature": {
+        "name": "Google Search",
+        "control_type": "Button",
+        "position": {
+          "cx": 466,
+          "cy": 390
+        }
+      },
+      "mode": "browser"
+    },
+    {
+      "action": {
+        "action": "wait",
+        "seconds": 2,
+        "why": "wait for search results page to load after clicking Google Search"
+      },
+      "signature": {
+        "name": "",
+        "control_type": "",
+        "position": null
+      },
+      "mode": "browser"
+    },
+    {
+      "action": {
+        "action": "wait",
+        "seconds": 2,
+        "why": "waiting for search results page to fully load after clicking Google Search"
+      },
+      "signature": {
+        "name": "",
+        "control_type": "",
+        "position": null
+      },
+      "mode": "browser"
+    }
+  ],
+  "created": "2026-08-08T17:38:33"
+}

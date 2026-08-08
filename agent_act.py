@@ -139,12 +139,118 @@ def _refocus_page_body(elements):
 def _get_browser_page():
     """Return the active CDP page, or None if Playwright/Chrome unavailable."""
     try:
+        from browser_perceive import get_active_page
+        page = get_active_page()
+        if page is not None:
+            return page
+    except Exception:
+        pass
+    try:
         from browser_locator import connect_browser, _active_page
         if connect_browser():
             return _active_page()
     except Exception:
         pass
     return None
+
+
+def _browser_click_element(page, el, eid):
+    """Click a browser element via Playwright selector; fall back to vx,vy."""
+    sel = el.get("selector")
+    if sel:
+        try:
+            page.click(sel, timeout=5000)
+            return True, (
+                f"clicked box {eid} (browser selector): "
+                f"{el.get('control_type')} '{el.get('name')}'"
+            )
+        except Exception as e:
+            print(f"  [click] selector click failed ({e}); trying mouse coords")
+    vx = el.get("vx", el.get("cx"))
+    vy = el.get("vy", el.get("cy"))
+    page.mouse.click(vx, vy)
+    return True, (
+        f"clicked box {eid} (browser coords): "
+        f"{el.get('control_type')} '{el.get('name')}'"
+    )
+
+
+def _pick_browser_type_target(page, elements):
+    """Choose a browser field to type into (selector-based).
+
+    Prefers the focused data-mimic-id element, then Edit/Document/ComboBox
+    with a selector (Google search is often a ComboBox).
+    """
+    by_id = {e.get("id"): e for e in elements if e.get("browser") and e.get("selector")}
+    # 1) Currently focused tagged element
+    try:
+        focused_id = page.evaluate(
+            """() => {
+                const a = document.activeElement;
+                if (!a) return null;
+                const id = a.getAttribute('data-mimic-id');
+                if (id) return parseInt(id, 10);
+                const tagged = a.closest('[data-mimic-id]');
+                return tagged ? parseInt(tagged.getAttribute('data-mimic-id'), 10) : null;
+            }"""
+        )
+        if focused_id in by_id:
+            return by_id[focused_id]
+    except Exception:
+        pass
+    # 2) Editable-ish controls with selectors
+    editable_types = ("Document", "Edit", "ComboBox")
+    candidates = [
+        e for e in elements
+        if e.get("browser") and e.get("selector")
+        and e.get("control_type") in editable_types
+        and not _looks_like_omnibox_element(e)
+    ]
+    if not candidates:
+        return None
+
+    def _score(el):
+        name = (el.get("name") or "").lower()
+        L, T, R, B = el["rect"]
+        area = max(0, R - L) * max(0, B - T)
+        bonus = 0
+        if any(k in name for k in ("search", "query", "find", "search google")):
+            bonus += 10_000_000
+        if el.get("control_type") == "Edit":
+            bonus += 1000
+        return bonus + area
+
+    return max(candidates, key=_score)
+
+
+def _browser_type_into(page, el, text, mode):
+    """Type into a browser field via fill (replace) or click+keyboard (append)."""
+    sel = el.get("selector")
+    if not sel:
+        return False, "no selector"
+    try:
+        if mode == "append":
+            page.click(sel, timeout=5000)
+            page.keyboard.press("End")
+            page.keyboard.type(text, delay=20)
+        elif mode == "as-is":
+            page.click(sel, timeout=5000)
+            page.keyboard.type(text, delay=20)
+        else:
+            # replace (default): fill focuses and sets value
+            try:
+                page.fill(sel, text, timeout=5000)
+            except Exception:
+                # Some controls (combobox) reject fill — click + select-all + type
+                page.click(sel, timeout=5000)
+                page.keyboard.press("Control+a")
+                page.keyboard.type(text, delay=20)
+        return True, (
+            f'typed "{text}" (browser selector {sel}, mode={mode}) '
+            f"into {el.get('control_type')} '{el.get('name')}'"
+        )
+    except Exception as e:
+        return False, f"browser type failed: {e}"
 
 
 def do_action(action, elements, target_procs=None, title_hint=None):
@@ -159,25 +265,13 @@ def do_action(action, elements, target_procs=None, title_hint=None):
         match = next((e for e in elements if e["id"] == eid), None)
         if not match:
             return False, f"no element with id {action.get('id')}"
-        # Browser DOM elements: prefer Playwright viewport click (more reliable
-        # than screen-coord pyautogui). No live element handle is stored on the
-        # dict — page.mouse.click(vx, vy) reuses the existing CDP connection.
-        # TODO: if needed, store a CSS/XPath handle for element.click() instead.
+        # Browser: prefer Playwright page.click(selector); coords only as fallback
         if match.get("browser"):
             try:
-                from browser_locator import connect_browser, _active_page
-                if not connect_browser():
-                    return False, "browser click failed: could not connect"
-                page = _active_page()
+                page = _get_browser_page()
                 if page is None:
                     return False, "browser click failed: no active page"
-                vx = match.get("vx", match["cx"])
-                vy = match.get("vy", match["cy"])
-                page.mouse.click(vx, vy)
-                return True, (
-                    f"clicked box {eid} (browser): "
-                    f"{match['control_type']} '{match['name']}'"
-                )
+                return _browser_click_element(page, match, eid)
             except Exception as e:
                 return False, f"browser click failed: {e}"
         try:
@@ -189,17 +283,32 @@ def do_action(action, elements, target_procs=None, title_hint=None):
     if kind == "type":
         text_missing = "text" not in action
         text = "" if text_missing else (action.get("text") or "")
+        mode = action.get("type_mode", "replace")
+
+        # Browser path: fill/click via data-mimic-id selector (reliable)
+        browser_els = [e for e in elements if e.get("browser")]
+        if browser_els:
+            page = _get_browser_page()
+            if page is not None:
+                target = _pick_browser_type_target(page, elements)
+                if target and target.get("selector"):
+                    ok, msg = _browser_type_into(page, target, text, mode)
+                    if ok:
+                        if text_missing:
+                            return True, f'typed "" (mode={mode}; text missing; browser)'
+                        return True, msg
+                    print(f"  [type] {msg}; falling back to keyboard send_keys")
+                else:
+                    print("  [type] no browser selector target; falling back to send_keys")
+
         # Never let free-text type land in the address bar / omnibox.
-        # navigate (page.goto) is the only path allowed to use the address bar.
         if _is_address_bar_focused():
             print("  [type] address bar focused — moving focus to page body first")
             _refocus_page_body(elements)
-        # Click into the main editable text area first (Document/Edit), so keys
-        # land in the body rather than after a tab/title click left focus elsewhere.
-        # Skip omnibox-named elements.
+        # Native / fallback: click editable then send_keys
         editables = [
             e for e in elements
-            if e.get("control_type") in ("Document", "Edit")
+            if e.get("control_type") in ("Document", "Edit", "ComboBox")
             and not _looks_like_omnibox_element(e)
         ]
         if editables:
@@ -207,13 +316,24 @@ def do_action(action, elements, target_procs=None, title_hint=None):
                 L, T, R, B = el["rect"]
                 return max(0, R - L) * max(0, B - T)
             target = max(editables, key=_area)
-            if target.get("browser"):
+            if target.get("browser") and target.get("selector"):
                 try:
                     page = _get_browser_page()
                     if page is not None:
-                        vx = target.get("vx", target["cx"])
-                        vy = target.get("vy", target["cy"])
-                        page.mouse.click(vx, vy)
+                        page.click(target["selector"], timeout=5000)
+                        time.sleep(0.2)
+                    else:
+                        pyautogui.click(target["cx"], target["cy"])
+                        time.sleep(0.2)
+                except Exception:
+                    pyautogui.click(target["cx"], target["cy"])
+                    time.sleep(0.2)
+            elif target.get("browser"):
+                try:
+                    page = _get_browser_page()
+                    if page is not None:
+                        page.mouse.click(target.get("vx", target["cx"]),
+                                         target.get("vy", target["cy"]))
                         time.sleep(0.2)
                     else:
                         pyautogui.click(target["cx"], target["cy"])
@@ -225,14 +345,8 @@ def do_action(action, elements, target_procs=None, title_hint=None):
                 pyautogui.click(target["cx"], target["cy"])
                 time.sleep(0.2)
         elif any(e.get("browser") for e in elements):
-            # Browser page with no obvious Edit — still leave omnibox if needed
             if _is_address_bar_focused():
                 _refocus_page_body(elements)
-        # type_mode controls where the text lands (fixes typing-mid-text bug):
-        #   'replace' (default) -> Ctrl+A then type, so the field's contents are replaced
-        #   'append'            -> Ctrl+End then type, so text is added at the end
-        #   'as-is'             -> type wherever the cursor is
-        mode = action.get("type_mode", "replace")
         if mode == "replace":
             send_keys("^a")
         elif mode == "append":

@@ -106,9 +106,17 @@ def _viewport_screen_offset(page):
 
 
 def _collect_dom_elements(page, max_elems=80):
-    """Extract visible interactable DOM nodes; coords are viewport-relative."""
+    """Extract visible interactable DOM nodes; tag each with data-mimic-id.
+
+    Numbering matches the element id shown to the model (1..N). Each raw item
+    includes mimic_id so we can build selector '[data-mimic-id=\"N\"]'.
+    """
     raw = page.evaluate(
-        """(sel) => {
+        """([sel, maxElems]) => {
+            // Clear prior tags from a previous perceive
+            for (const old of document.querySelectorAll('[data-mimic-id]')) {
+                old.removeAttribute('data-mimic-id');
+            }
             const out = [];
             const seen = new Set();
             for (const el of document.querySelectorAll(sel)) {
@@ -131,18 +139,35 @@ def _collect_dom_elements(page, max_elems=80):
                              Math.round(r.width), Math.round(r.height), label].join('|');
                 if (seen.has(key)) continue;
                 seen.add(key);
+                const mimicId = out.length + 1;
+                el.setAttribute('data-mimic-id', String(mimicId));
                 out.push({
                     tag: el.tagName.toLowerCase(),
                     role: el.getAttribute('role') || '',
                     name: label,
-                    x: r.x, y: r.y, w: r.width, h: r.height
+                    x: r.x, y: r.y, w: r.width, h: r.height,
+                    mimic_id: mimicId
                 });
+                if (out.length >= maxElems) break;
             }
             return out;
         }""",
-        _INTERACTABLE,
+        [_INTERACTABLE, max_elems],
     )
     return raw[:max_elems]
+
+
+def get_active_page():
+    """Return the current Playwright page (CDP), or None if unavailable."""
+    try:
+        if connect_browser is None or _active_page is None:
+            return None
+        if not connect_browser():
+            return None
+        return _active_page()
+    except Exception:
+        return None
+
 
 
 def _fast_screenshot(page, save_path):
@@ -217,7 +242,8 @@ def perceive_browser(save_path="browser_view.png"):
     mode/url/title/blank_tab so the loop can keep browser mode and still run
     navigate (page.goto) with an empty element list.
 
-    Each element: {id, name, control_type, rect, cx, cy, browser=True, ...}.
+    Each element: {id, name, control_type, rect, cx, cy, vx, vy, browser=True,
+    selector='[data-mimic-id=\"N\"]', ...}.
     """
     if connect_browser is None or _active_page is None:
         raise RuntimeError("browser_locator / Playwright not available")
@@ -246,8 +272,9 @@ def perceive_browser(save_path="browser_view.png"):
         L, T, R, B = int(x), int(y), int(x + w), int(y + h)
         vx = (L + R) // 2
         vy = (T + B) // 2
+        mimic_id = int(item.get("mimic_id") or i)
         elements.append({
-            "id": i,
+            "id": mimic_id,
             "name": item.get("name") or "",
             "control_type": _control_type(item.get("tag"), item.get("role")),
             # viewport rect for draw_marks on the page screenshot (offset 0)
@@ -261,6 +288,8 @@ def perceive_browser(save_path="browser_view.png"):
             "vy": vy,
             "browser": True,
             "offset_ok": offset_ok,
+            # Stable Playwright selector (data-mimic-id tagged during extraction)
+            "selector": f'[data-mimic-id="{mimic_id}"]',
         })
 
     # Zero interactables on a blank/New Tab is expected — keep browser mode
