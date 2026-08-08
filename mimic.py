@@ -6,6 +6,11 @@ from menu import choose_and_run
 from agent_run import run_goal
 from trained_workflows import save_trained, list_trained, load_trained
 from auto_runner import run_trained
+from library import list_workflows
+from transcribe import transcribe
+from harness_store import save_harness, load_harness, load_harness_steps, list_harness
+from harness import run_harness
+from harness_schema import step_from_dict
 
 
 def _read_goal():
@@ -94,13 +99,11 @@ def _run_trained_workflow():
         if 1 <= idx <= len(names):
             chosen = names[idx - 1]
     else:
-        # accept with or without trained_ prefix
         if raw in names:
             chosen = raw
         elif ("trained_" + raw) in names:
             chosen = "trained_" + raw
         else:
-            # try load_trained fuzzy
             if load_trained(raw):
                 chosen = raw
     if not chosen:
@@ -112,6 +115,129 @@ def _run_trained_workflow():
     print(f"\n=== auto run ended: {result} ===")
 
 
+def _pick_from_list(names, prompt="pick number (or name): "):
+    """Shared picker: number or name from a list. Returns chosen stem or None."""
+    raw = input(f"\n{prompt}").strip()
+    if not raw:
+        return None
+    if raw.isdigit():
+        idx = int(raw)
+        if 1 <= idx <= len(names):
+            return names[idx - 1]
+        return None
+    if raw in names:
+        return raw
+    return raw  # let caller try load by name
+
+
+def _transcribe_recording():
+    """Option 6: pick a recorded workflow -> transcript.txt/json -> optional save."""
+    names = list_workflows()
+    if not names:
+        print("  no recorded workflows yet.")
+        return
+    print("\nRecorded workflows (to transcribe):")
+    for i, n in enumerate(names, 1):
+        print(f"  {i}. {n}")
+    chosen = _pick_from_list(names)
+    if not chosen:
+        print("cancelled.")
+        return
+    if chosen not in names:
+        # allow path or exact library name
+        pass
+    out_txt = "transcript.txt"
+    out_json = "transcript.json"
+    try:
+        steps, inputs = transcribe(chosen, out_txt=out_txt, out_json=out_json)
+    except Exception as e:
+        print(f"  transcribe failed: {e}")
+        return
+    print(f"\n  Edit the transcript here:")
+    print(f"    {out_txt}   (human-readable)")
+    print(f"    {out_json}  (structured HarnessSteps)")
+    if inputs:
+        print(f"  Declared INPUTS: {', '.join('{'+x+'}' for x in inputs)}")
+    ans = input("\n  save as a harness workflow now? (y/n): ").strip().lower()
+    if ans != "y":
+        print("  (you can save later via option 7 after editing transcript.json)")
+        return
+    name = input("  name this harness workflow: ").strip()
+    if not name:
+        print("  no name — not saving.")
+        return
+    try:
+        stem = save_harness(name, steps, inputs=inputs)
+        print(f"  saved as '{stem}'. Run it with option 7.")
+    except FileExistsError as e:
+        ow = input(f"  {e}\n  overwrite? (y/n): ").strip().lower()
+        if ow == "y":
+            stem = save_harness(name, steps, inputs=inputs, overwrite=True)
+            print(f"  overwritten '{stem}'.")
+        else:
+            print("  not saved.")
+
+
+def _prompt_inputs(declared):
+    """Ask the user to fill each declared {placeholder}. Returns dict."""
+    values = {}
+    if not declared:
+        return values
+    print("\nFill inputs for this run (Enter to leave empty):")
+    for key in declared:
+        try:
+            val = input(f"  {{{key}}} = ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+        values[key] = val
+    return values
+
+
+def _run_harness_workflow():
+    """Option 7: pick a harness workflow, fill inputs, run_harness."""
+    names = list_harness()
+    if not names:
+        print("  no harness workflows yet. use option 6 to transcribe a recording.")
+        return
+    print("\nHarness workflows:")
+    for i, n in enumerate(names, 1):
+        wf = load_harness(n)
+        n_steps = len((wf or {}).get("steps") or [])
+        inps = (wf or {}).get("inputs") or []
+        extra = f"  inputs={inps}" if inps else ""
+        print(f"  {i}. {n}  ({n_steps} steps){extra}")
+    chosen = _pick_from_list(names)
+    if not chosen:
+        print("cancelled.")
+        return
+    if chosen not in names:
+        if ("harness_" + chosen) in names:
+            chosen = "harness_" + chosen
+        elif not load_harness(chosen):
+            print("invalid pick.")
+            return
+    wf = load_harness(chosen)
+    if not wf:
+        print(f"  could not load '{chosen}'")
+        return
+    steps = [step_from_dict(s) for s in wf.get("steps") or [] if isinstance(s, dict)]
+    if not steps:
+        # try load_harness_steps
+        steps = load_harness_steps(chosen) or []
+    if not steps:
+        print("  workflow has no steps.")
+        return
+    declared = list(wf.get("inputs") or [])
+    inputs = _prompt_inputs(declared)
+    print(f"\n  Running harness '{chosen}' ({len(steps)} steps) "
+          f"with approval on each action.\n")
+    transcript = run_harness(steps, inputs=inputs, require_approval=True)
+    oks = sum(1 for t in transcript if t.get("ok") or t.get("outcome") == "done")
+    print(f"\n=== harness run ended: {len(transcript)} records, "
+          f"{oks} ok/done ===")
+
+
 def main():
     while True:
         print("\n=== MimicAgent ===")
@@ -120,6 +246,8 @@ def main():
         print("  3. Chat with the agent")
         print("  4. Train a workflow")
         print("  5. Run a trained workflow (auto)")
+        print("  6. Transcribe a recording into an editable workflow")
+        print("  7. Run a harness workflow")
         print("  0. Quit")
         choice = input("\nchoice: ").strip()
 
@@ -138,6 +266,10 @@ def main():
             _train_workflow()
         elif choice == "5":
             _run_trained_workflow()
+        elif choice == "6":
+            _transcribe_recording()
+        elif choice == "7":
+            _run_harness_workflow()
         elif choice == "0":
             print("bye.")
             break

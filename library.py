@@ -8,8 +8,10 @@ easy to back up.
 
 Recorded workflows = a JSON LIST of step dicts (this module).
 Trained workflows  = a JSON DICT {name, goal, trace, ...} (trained_workflows.py),
-                     stored as trained_*.json (or under workflows/trained/).
-Option 1 only lists recorded; option 5 only lists trained — they stay disjoint.
+                     stored as trained_*.json.
+Harness workflows  = a JSON DICT {name, steps, inputs, ...} (harness_store.py),
+                     stored as harness_*.json.
+Option 1 only lists recorded; option 5 trained; option 7 harness — disjoint.
 
   list_workflows()              -> ['apply_job', 'notepad_greeting', ...]
   load_workflow(name)           -> [steps] or None
@@ -50,12 +52,28 @@ def _is_trained_stem(stem):
     return (stem or "").startswith("trained_")
 
 
+def _is_harness_stem(stem):
+    """Filename stem reserved for harness workflows (option 7)."""
+    return (stem or "").startswith("harness_")
+
+
 def _is_trained_payload(data):
     """True if JSON looks like a trained workflow {goal, trace, ...}."""
     return (
         isinstance(data, dict)
         and ("trace" in data or "goal" in data)
+        and "trace" in data  # trained must have trace
         and not isinstance(data, list)
+    )
+
+
+def _is_harness_payload(data):
+    """True if JSON looks like a harness workflow {steps, inputs, ...}."""
+    return (
+        isinstance(data, dict)
+        and "steps" in data
+        and isinstance(data.get("steps"), list)
+        and "trace" not in data
     )
 
 
@@ -77,20 +95,20 @@ def _load_raw(name):
 
 
 def list_workflows():
-    """Recorded workflow names only (excludes trained_*), sorted."""
+    """Recorded workflow names only (excludes trained_* and harness_*), sorted."""
     _ensure_dir()
     names = []
     for p in glob.glob(os.path.join(WORKFLOWS_DIR, "*.json")):
         stem = os.path.splitext(os.path.basename(p))[0]
-        if _is_trained_stem(stem):
+        if _is_trained_stem(stem) or _is_harness_stem(stem):
             continue
-        # Also exclude by content shape (trained file without prefix)
+        # Also exclude by content shape (trained/harness without prefix)
         try:
             with open(p, "r", encoding="utf-8") as f:
                 data = json.load(f)
         except Exception:
             continue
-        if _is_trained_payload(data):
+        if _is_trained_payload(data) or _is_harness_payload(data):
             continue
         if not _is_recorded_steps(data):
             continue
@@ -101,15 +119,16 @@ def list_workflows():
 def load_workflow(name):
     """Load a recorded workflow's step list by name, or None.
 
-    Returns None for missing files, trained workflows, or non-list JSON
-    so callers never treat a trained dict as a step list.
+    Returns None for missing files, trained/harness workflows, or non-list JSON
+    so callers never treat a trained/harness dict as a step list.
     """
-    if _is_trained_stem(_safe_name(name)):
+    stem = _safe_name(name)
+    if _is_trained_stem(stem) or _is_harness_stem(stem):
         return None
     data = _load_raw(name)
     if data is None:
         return None
-    if _is_trained_payload(data):
+    if _is_trained_payload(data) or _is_harness_payload(data):
         return None
     if not _is_recorded_steps(data):
         return None
@@ -120,12 +139,16 @@ def save_workflow(name, steps, overwrite=False):
     """Save steps under a name. Refuses to overwrite unless overwrite=True.
     Returns the stored name (the safe stem). Raises FileExistsError if it
     exists and overwrite is False, so a recording never silently clobbers.
-    Refuses names that collide with the trained_ prefix."""
+    Refuses names that collide with the trained_/harness_ prefixes."""
     _ensure_dir()
     stem = _safe_name(name)
     if _is_trained_stem(stem):
         raise ValueError(
             f"'{stem}' is reserved for trained workflows (use trained_workflows.save_trained)."
+        )
+    if _is_harness_stem(stem):
+        raise ValueError(
+            f"'{stem}' is reserved for harness workflows (use harness_store.save_harness)."
         )
     p = _path(name)
     if os.path.isfile(p) and not overwrite:

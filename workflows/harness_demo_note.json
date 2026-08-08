@@ -1,0 +1,33 @@
+{
+  "name": "harness_demo_note",
+  "steps": [
+    {
+      "kind": "native",
+      "description": "Click into Notepad text area",
+      "goal": null,
+      "action": {
+        "action": "click",
+        "why": "Click into Notepad text area"
+      },
+      "target_name": "Text editor",
+      "target_type": "Document",
+      "inputs": []
+    },
+    {
+      "kind": "native",
+      "description": "Type a greeting",
+      "goal": null,
+      "action": {
+        "action": "type",
+        "text": "hello from an MCP call",
+        "type_mode": "replace",
+        "why": "type recorded text"
+      },
+      "target_name": "Text editor",
+      "target_type": null,
+      "inputs": []
+    }
+  ],
+  "inputs": [],
+  "created": "2026-08-08T19:14:31"
+}
