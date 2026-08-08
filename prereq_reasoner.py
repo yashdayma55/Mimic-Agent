@@ -131,16 +131,48 @@ def _launch(candidates, wait=3):
     return False
 
 
+def _debug_port_open(port=9222):
+    """True if Chrome's remote-debugging HTTP endpoint responds on the port."""
+    try:
+        import urllib.request
+        url = f"http://localhost:{port}/json/version"
+        with urllib.request.urlopen(url, timeout=2) as resp:
+            return getattr(resp, "status", 200) == 200
+    except Exception:
+        return False
+
+
+def _launch_debug_chrome(wait=3):
+    """Launch Chrome with --remote-debugging-port=9222 and the debug profile."""
+    chrome = next((p for p in CAPABILITIES["browser"]["launch"] if os.path.exists(p)), None)
+    if not chrome:
+        print("   could not find chrome.exe to launch in debug mode")
+        return False
+    try:
+        subprocess.Popen([chrome, "--remote-debugging-port=9222",
+                          r"--user-data-dir=C:\chrome-debug"])
+        print("   launched Chrome with remote debugging on 9222")
+        time.sleep(wait)
+        return _debug_port_open(9222)
+    except Exception as e:
+        print(f"   could not launch debug Chrome: {e}")
+        return False
+
+
 def focus_app(proc_names, title_hint=None):
     """Bring an app's window to the foreground so perception sees the RIGHT window.
-    Tries by process -> window title. Returns True if a window was focused."""
+
+    When multiple windows match the process: prefer the one whose TITLE best
+    matches title_hint; otherwise pick the most recently active (topmost in
+    z-order) matching window. Returns True if a window was focused."""
     try:
         import win32gui, win32process, win32con
     except Exception:
         return False
 
     targets = [pn.lower() for pn in proc_names]
-    found = {"hwnd": None}
+    # EnumWindows is topmost-first (z-order); keep that order.
+    candidates = []  # (hwnd, title) in z-order
 
     def enum_cb(hwnd, _):
         if not win32gui.IsWindowVisible(hwnd):
@@ -152,22 +184,49 @@ def focus_app(proc_names, title_hint=None):
             pname = psutil.Process(pid).name().lower()
             title = win32gui.GetWindowText(hwnd)
             if pname in targets and title.strip():
-                if (title_hint is None) or (title_hint.lower() in title.lower()):
-                    found["hwnd"] = hwnd
+                candidates.append((hwnd, title))
         except Exception:
             pass
 
     win32gui.EnumWindows(enum_cb, None)
-    if found["hwnd"]:
-        try:
-            win32gui.ShowWindow(found["hwnd"], win32con.SW_RESTORE)
-            win32gui.SetForegroundWindow(found["hwnd"])
-            import time; time.sleep(0.6)
-            print(f"   focused the {proc_names[0]} window")
-            return True
-        except Exception as e:
-            print(f"   could not focus window: {e}")
-    return False
+    if not candidates:
+        return False
+
+    chosen_hwnd = None
+    chosen_title = None
+    reason = "most recently active match"
+
+    if title_hint:
+        hint = title_hint.strip().lower()
+        if hint:
+            scored = []
+            for hwnd, title in candidates:
+                t = title.lower()
+                if hint in t:
+                    # Prefer tighter title matches (hint covers more of the title)
+                    score = len(hint) / max(len(t), 1)
+                    scored.append((score, hwnd, title))
+            if scored:
+                scored.sort(key=lambda x: x[0], reverse=True)
+                _, chosen_hwnd, chosen_title = scored[0]
+                reason = f"title hint '{title_hint}'"
+
+    if chosen_hwnd is None:
+        # First in z-order among process matches = most recently active
+        chosen_hwnd, chosen_title = candidates[0]
+        if title_hint:
+            reason = f"most recently active (no title matched '{title_hint}')"
+
+    try:
+        win32gui.ShowWindow(chosen_hwnd, win32con.SW_RESTORE)
+        win32gui.SetForegroundWindow(chosen_hwnd)
+        time.sleep(0.6)
+        short = (chosen_title or "")[:70]
+        print(f"   focused [{proc_names[0]}] '{short}' ({reason})")
+        return True
+    except Exception as e:
+        print(f"   could not focus window: {e}")
+        return False
 
 
 def ensure_capability(name):
@@ -178,21 +237,26 @@ def ensure_capability(name):
 
     # special case: browser with debugging port (for the control tier)
     if name == "browser_debug":
-        if _is_running("chrome.exe"):
-            print("   Chrome is running (note: may need the debug port for control)")
+        if _debug_port_open(9222):
+            print("   debug Chrome already running on 9222")
             return True
-        chrome = next((p for p in CAPABILITIES["browser"]["launch"] if os.path.exists(p)), None)
-        if chrome:
-            try:
-                subprocess.Popen([chrome, "--remote-debugging-port=9222",
-                                  r'--user-data-dir=C:\chrome-debug'])
-                print("   launched Chrome with remote debugging on 9222")
-                time.sleep(3)
-                return True
-            except Exception as e:
-                print(f"   could not launch debug Chrome: {e}")
+        if _is_running("chrome.exe"):
+            print("   Chrome is running WITHOUT the debug port. To control it, Chrome must be")
+            print("   relaunched in debug mode. Close Chrome and relaunch in debug mode? (y/n)")
+            ans = input("   ").strip().lower()
+            if ans != "y":
+                print("   browser control is unavailable (debug port not open)")
                 return False
-        return False
+            try:
+                subprocess.run(["taskkill", "/F", "/IM", "chrome.exe"],
+                               capture_output=True, text=True, timeout=30)
+            except Exception as e:
+                print(f"   could not close Chrome: {e}")
+                return False
+            time.sleep(2)
+            return _launch_debug_chrome(wait=3)
+        # no Chrome at all — launch debug Chrome
+        return _launch_debug_chrome(wait=3)
 
     if any(_is_running(pn) for pn in cap["procs"]):
         print(f"   '{name}' already available")
@@ -215,7 +279,17 @@ def prepare_for(goal=None, steps=None):
         # bring the app to the foreground so the agent perceives the RIGHT window
         if ready:
             capdef = CAPABILITIES.get(cap, {})
-            focus_app(capdef.get("procs", []))
+            hint = None
+            if goal:
+                # soft title hint from goal text (site/app name substring)
+                g = goal.lower()
+                for token in ("linkedin", "gmail", "github", "youtube",
+                              "notion", "chatgpt", "claude", "google",
+                              "notepad"):
+                    if token in g:
+                        hint = token
+                        break
+            focus_app(capdef.get("procs", []), title_hint=hint)
         results.append((cap, ready))
     return results
 

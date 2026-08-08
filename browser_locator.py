@@ -10,54 +10,130 @@ The engine calls:
 """
 
 from playwright.sync_api import sync_playwright
+import atexit
 
 _pw = None          # the playwright context manager
 _browser = None     # the connected browser
+_atexit_registered = False
 
 
 def connect_browser(cdp_url="http://localhost:9222"):
     """Attach to the running debug Chrome. Call once at start of a browser run."""
-    global _pw, _browser
+    global _pw, _browser, _atexit_registered
     if _browser is not None:
         return True
     try:
         _pw = sync_playwright().start()
         _browser = _pw.chromium.connect_over_cdp(cdp_url)
         print("   [browser] connected to Chrome")
+        if not _atexit_registered:
+            atexit.register(disconnect_browser)
+            _atexit_registered = True
         return True
     except Exception as e:
         print(f"   [browser] could NOT connect ({e}) - is debug Chrome running?")
+        # clean up a half-started playwright driver so exit doesn't EPIPE
+        disconnect_browser()
         return False
 
 
 def disconnect_browser():
+    """Close CDP connection + stop Playwright; swallow errors (no EPIPE traceback)."""
     global _pw, _browser
+    had = _browser is not None or _pw is not None
     try:
-        if _browser:
-            _browser.close()
-        if _pw:
-            _pw.stop()
+        if _browser is not None:
+            try:
+                _browser.close()
+            except Exception:
+                pass
+        if _pw is not None:
+            try:
+                _pw.stop()
+            except Exception:
+                pass
+        if had:
+            print("   [browser] closed")
     except Exception:
         pass
-    _browser = None
-    _pw = None
+    finally:
+        _browser = None
+        _pw = None
 
 
 def _active_page():
-    """Return the frontmost / best-guess page across all tabs."""
+    """Return the frontmost / best-guess page across all tabs.
+
+    Prefers the tab matching the foreground Chrome window title; otherwise the
+    most recently opened real (non-chrome://) page; otherwise the newest blank.
+    """
     if not _browser or not _browser.contexts:
         return None
-    ctx = _browser.contexts[0]
-    if not ctx.pages:
-        return None
-    # prefer a page that is not a blank/new tab
-    for pg in ctx.pages:
+    pages = []
+    for ctx in _browser.contexts:
         try:
-            if pg.url and not pg.url.startswith("chrome://"):
-                return pg
+            pages.extend(ctx.pages)
         except Exception:
             continue
-    return ctx.pages[0]
+    if not pages:
+        return None
+
+    def _url_of(pg):
+        try:
+            return (pg.url or "").strip()
+        except Exception:
+            return ""
+
+    def _title_of(pg):
+        try:
+            return (pg.title() or "").strip()
+        except Exception:
+            return ""
+
+    def _is_blank(url):
+        u = (url or "").lower()
+        return (
+            not u
+            or u == "about:blank"
+            or u.startswith("chrome://")
+            or u.startswith("edge://")
+        )
+
+    # 1) Match the OS-frontmost Chrome window title to a tab
+    try:
+        import win32gui
+        fg_title = win32gui.GetWindowText(win32gui.GetForegroundWindow()) or ""
+        tab_title = fg_title
+        for suffix in (" - Google Chrome", " - Chrome", " - Chromium", " - Microsoft Edge"):
+            if tab_title.endswith(suffix):
+                tab_title = tab_title[: -len(suffix)]
+                break
+        needle = tab_title.strip().lower()
+        if needle:
+            # Exact title match first
+            for pg in pages:
+                if _title_of(pg).lower() == needle:
+                    return pg
+            # Fuzzy contains (e.g. truncated titles)
+            for pg in pages:
+                pt = _title_of(pg).lower()
+                if pt and (needle in pt or pt in needle):
+                    return pg
+            # New Tab with blank URL
+            if needle in ("new tab", "新标签页", "nouvel onglet"):
+                blanks = [pg for pg in pages if _is_blank(_url_of(pg))]
+                if blanks:
+                    return blanks[-1]
+    except Exception:
+        pass
+
+    # 2) Prefer real pages (last in list ≈ most recently created/navigated)
+    real = [pg for pg in pages if not _is_blank(_url_of(pg))]
+    if real:
+        return real[-1]
+
+    # 3) Only blanks / chrome:// — pick the newest
+    return pages[-1]
 
 
 def is_browser_step(step):

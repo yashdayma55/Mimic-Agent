@@ -9,8 +9,12 @@ Connection method (reuses the project's existing browser tier — do NOT duplica
 
 Returns element dicts shaped like the accessibility-tree set-of-mark list so the
 agent loop can treat them as a drop-in: id, name, control_type, rect, cx, cy.
+
+Screenshot is best-effort only: DOM element extraction is the source of truth.
+A slow/failed screenshot must NOT abort browser perception.
 """
 
+import os
 from PIL import Image
 
 try:
@@ -41,6 +45,10 @@ _TAG_TO_CONTROL = {
     "textarea": "Edit",
 }
 
+# Tiny blank PNG reused when screenshot is skipped (downstream needs a path)
+_BLANK_PNG_PATH = "browser_view_blank.png"
+_SCREENSHOT_TIMEOUT_MS = 5000
+
 
 def _control_type(tag, role):
     if role:
@@ -52,6 +60,20 @@ def _control_type(tag, role):
         if role.lower() in role_map:
             return role_map[role.lower()]
     return _TAG_TO_CONTROL.get((tag or "").lower(), (tag or "Element").capitalize())
+
+
+def _blank_fallback_png(path=None):
+    """Ensure a tiny blank PNG exists; return its path for image-required callers."""
+    path = path or _BLANK_PNG_PATH
+    try:
+        if not os.path.isfile(path) or os.path.getsize(path) < 8:
+            Image.new("RGB", (4, 4), (255, 255, 255)).save(path, format="PNG")
+    except Exception:
+        try:
+            Image.new("RGB", (4, 4), (255, 255, 255)).save(path, format="PNG")
+        except Exception:
+            pass
+    return path
 
 
 def _viewport_screen_offset(page):
@@ -123,13 +145,79 @@ def _collect_dom_elements(page, max_elems=80):
     return raw[:max_elems]
 
 
+def _fast_screenshot(page, save_path):
+    """Best-effort viewport screenshot: short timeout, no font/animation waits.
+
+    Returns True if save_path was written successfully.
+    """
+    # Bypass Playwright's internal "wait for fonts to load" (common 30s hang)
+    os.environ.setdefault("PW_TEST_SCREENSHOT_NO_FONTS_READY", "1")
+    try:
+        page.screenshot(
+            path=save_path,
+            type="png",
+            full_page=False,
+            timeout=_SCREENSHOT_TIMEOUT_MS,
+            animations="disabled",
+            caret="initial",
+        )
+        return os.path.isfile(save_path) and os.path.getsize(save_path) > 0
+    except TypeError:
+        # Older Playwright may not accept animations/caret — retry minimal args
+        try:
+            page.screenshot(
+                path=save_path,
+                type="png",
+                full_page=False,
+                timeout=_SCREENSHOT_TIMEOUT_MS,
+            )
+            return os.path.isfile(save_path) and os.path.getsize(save_path) > 0
+        except Exception as e:
+            print(f"   [browser] screenshot skipped ({e})")
+            return False
+    except Exception as e:
+        print(f"   [browser] screenshot skipped ({e})")
+        return False
+
+
+def _page_url_title(page):
+    """Best-effort url/title from a Playwright page."""
+    url, title = "", ""
+    try:
+        url = page.url or ""
+    except Exception:
+        pass
+    try:
+        title = page.title() or ""
+    except Exception:
+        pass
+    return url, title
+
+
+def _is_blank_tab_url(url):
+    u = (url or "").lower().strip()
+    return (
+        not u
+        or u == "about:blank"
+        or u.startswith("chrome://")
+        or u.startswith("edge://")
+    )
+
+
 def perceive_browser(save_path="browser_view.png"):
     """Perceive the active Chrome tab via CDP/DOM.
 
-    Returns (elements, image_path) drop-in compatible with agent_loop.perceive().
+    DOM interactable elements are extracted FIRST (required). Screenshot is
+    best-effort: if it times out or fails, we still return the element list
+    with a blank placeholder image so callers do not fall back to the native
+    accessibility tree.
+
+    Blank / New Tab / chrome:// pages may yield zero interactables — that is OK.
+    Returns (elements, image_path, page_info). page_info always includes
+    mode/url/title/blank_tab so the loop can keep browser mode and still run
+    navigate (page.goto) with an empty element list.
+
     Each element: {id, name, control_type, rect, cx, cy, browser=True, ...}.
-    rect/sx/sy are viewport pixels (for marks on the page screenshot);
-    cx/cy are screen pixels (for pyautogui), using the estimated window offset.
     """
     if connect_browser is None or _active_page is None:
         raise RuntimeError("browser_locator / Playwright not available")
@@ -141,8 +229,16 @@ def perceive_browser(save_path="browser_view.png"):
     if page is None:
         raise RuntimeError("no active Chrome page")
 
+    url, title = _page_url_title(page)
+    blank_tab = _is_blank_tab_url(url)
+
+    # ---- 1. DOM elements first (this is what drives perception) ----
     ox, oy, offset_ok = _viewport_screen_offset(page)
-    raw = _collect_dom_elements(page)
+    try:
+        raw = _collect_dom_elements(page)
+    except Exception as e:
+        print(f"[browser] DOM query failed ({e}) — continuing with empty list")
+        raw = []
 
     elements = []
     for i, item in enumerate(raw, start=1):
@@ -167,22 +263,56 @@ def perceive_browser(save_path="browser_view.png"):
             "offset_ok": offset_ok,
         })
 
-    # Playwright page screenshot = accurate page pixels; mark with viewport rects
-    page.screenshot(path=save_path, type="png")
-    if draw_marks and elements:
-        img = Image.open(save_path).convert("RGB")
-        annotated = draw_marks(img, elements, offset_x=0, offset_y=0, scale=1.0)
-        annotated.save(save_path)
+    # Zero interactables on a blank/New Tab is expected — keep browser mode
+    if not elements and blank_tab:
+        print(f"[browser] blank/New Tab (url={url!r}) — DOM empty; "
+              f"navigate (page.goto) still works")
+    elif not elements:
+        # Treat empty DOM like a soft blank so the loop does not drop to native
+        blank_tab = True
+        print(f"[browser] empty DOM (url={url!r}) — keeping browser mode; "
+              f"prefer navigate if you need a URL")
 
-    return elements, save_path
+    page_info = {
+        "mode": "browser",
+        "url": url,
+        "title": title,
+        "blank_tab": blank_tab or _is_blank_tab_url(url),
+        "address_bar_focused": False,
+    }
+
+    # ---- 2. Screenshot is optional / best-effort ----
+    def _finish(img_path):
+        return elements, img_path, page_info
+
+    got_shot = _fast_screenshot(page, save_path)
+    if got_shot:
+        if draw_marks and elements:
+            try:
+                img = Image.open(save_path).convert("RGB")
+                annotated = draw_marks(img, elements, offset_x=0, offset_y=0, scale=1.0)
+                annotated.save(save_path)
+            except Exception as e:
+                print(f"   [browser] mark overlay skipped ({e})")
+        return _finish(save_path)
+
+    # Screenshot failed/timed out — still return DOM elements (do NOT raise)
+    print("[browser] screenshot skipped (slow), using DOM elements only")
+    blank = _blank_fallback_png()
+    try:
+        Image.new("RGB", (4, 4), (255, 255, 255)).save(save_path, format="PNG")
+        return _finish(save_path)
+    except Exception:
+        return _finish(blank)
 
 
 if __name__ == "__main__":
     print("=== browser_perceive: DOM perception via CDP (port 9222) ===")
     print("Reuse: browser_locator.connect_browser -> connect_over_cdp(localhost:9222)")
     try:
-        elements, path = perceive_browser()
-        print(f"found {len(elements)} page elements -> {path}\n")
+        elements, path, page_info = perceive_browser()
+        print(f"found {len(elements)} page elements -> {path}")
+        print(f"page_info: {page_info}\n")
         for el in elements[:20]:
             print(f"  {el['id']}: {el['control_type']} '{el['name']}' "
                   f"rect={el['rect']} screen=({el['cx']},{el['cy']})")
@@ -192,5 +322,9 @@ if __name__ == "__main__":
         print(f"FAILED: {e}")
         print("Is debug Chrome running? (browser_debug / --remote-debugging-port=9222)")
     finally:
-        if disconnect_browser:
-            disconnect_browser()
+        # Always tear down Playwright cleanly so exit does not throw EPIPE
+        try:
+            if disconnect_browser:
+                disconnect_browser()
+        except Exception:
+            print("   [browser] closed")
