@@ -1,15 +1,16 @@
 """
 Trained workflows: goal + verified step hints from a human-approved training run.
 
-Stored as JSON in workflows/ with a 'trained_' filename prefix so they do not
-clash with raw recorded plans (plain step lists) from library.py.
+Stored as workflows/trained_<name>.json (DICT with goal/trace) so they do not
+clash with raw recorded plans (LIST of steps) from library.py.
+list_trained() and library.list_workflows() are disjoint.
 """
 
 import os
 import json
 from datetime import datetime
 
-from library import WORKFLOWS_DIR, _safe_name, _ensure_dir
+from library import WORKFLOWS_DIR, _safe_name, _ensure_dir, _is_trained_payload
 
 
 def _trained_stem(name):
@@ -28,7 +29,7 @@ def save_trained(name, goal, trace, overwrite=False):
     """Save a trained workflow {name, goal, trace, created}.
 
     Raises FileExistsError if it already exists and overwrite is False.
-    Returns the stored stem name.
+    Returns the stored stem name (always trained_*).
     """
     _ensure_dir()
     stem = _trained_stem(name)
@@ -63,29 +64,39 @@ def load_trained(name):
             data = json.load(f)
     except Exception:
         return None
-    if not isinstance(data, dict) or "trace" not in data or "goal" not in data:
+    if not _is_trained_payload(data):
+        return None
+    if "trace" not in data or "goal" not in data:
         return None
     return data
 
 
 def list_trained():
-    """Names of trained workflows (stems), sorted."""
+    """Names of trained workflows only (trained_*.json with goal/trace), sorted."""
     _ensure_dir()
     names = []
-    for fname in os.listdir(WORKFLOWS_DIR):
+    try:
+        entries = os.listdir(WORKFLOWS_DIR)
+    except Exception:
+        return []
+    for fname in entries:
         if not fname.endswith(".json"):
             continue
         stem = fname[:-5]
-        if not stem.startswith("trained_"):
-            continue
-        # verify shape
+        # Prefer prefix; also accept unprefixed dict-shaped files as trained
+        path = os.path.join(WORKFLOWS_DIR, fname)
         try:
-            with open(os.path.join(WORKFLOWS_DIR, fname), "r", encoding="utf-8") as f:
+            with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            if isinstance(data, dict) and "trace" in data and "goal" in data:
-                names.append(stem)
         except Exception:
             continue
+        if not _is_trained_payload(data):
+            continue
+        if "trace" not in data or "goal" not in data:
+            continue
+        # Only list under trained_* names so option 5 stays clean;
+        # if somehow unprefixed, still show it so it isn't orphaned.
+        names.append(stem)
     return sorted(names)
 
 

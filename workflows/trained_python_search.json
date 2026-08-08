@@ -1,0 +1,20 @@
+{
+  "name": "trained_python_search",
+  "goal": "search google for python",
+  "trace": [
+    {
+      "action": {
+        "action": "press",
+        "key": "enter",
+        "why": "Submit the search query 'python' that is already typed in the search box"
+      },
+      "signature": {
+        "name": "",
+        "control_type": "",
+        "position": null
+      },
+      "mode": "browser"
+    }
+  ],
+  "created": "2026-08-08T17:55:32"
+}
