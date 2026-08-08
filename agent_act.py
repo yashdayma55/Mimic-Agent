@@ -51,11 +51,31 @@ def do_action(action, elements, target_procs=None):
         match = next((e for e in elements if e["id"] == eid), None)
         if not match:
             return False, f"no element with id {action.get('id')}"
+        # Browser DOM elements: prefer Playwright viewport click (more reliable
+        # than screen-coord pyautogui). No live element handle is stored on the
+        # dict — page.mouse.click(vx, vy) reuses the existing CDP connection.
+        # TODO: if needed, store a CSS/XPath handle for element.click() instead.
+        if match.get("browser"):
+            try:
+                from browser_locator import connect_browser, _active_page
+                if connect_browser():
+                    page = _active_page()
+                    if page is not None:
+                        vx = match.get("vx", match["cx"])
+                        vy = match.get("vy", match["cy"])
+                        page.mouse.click(vx, vy)
+                        return True, (
+                            f"clicked box {eid} (browser): "
+                            f"{match['control_type']} '{match['name']}'"
+                        )
+            except Exception:
+                pass  # fall through to pyautogui at cx, cy
         pyautogui.click(match["cx"], match["cy"])
         return True, f"clicked box {eid}: {match['control_type']} '{match['name']}'"
 
     if kind == "type":
-        text = action.get("text", "")
+        text_missing = "text" not in action
+        text = "" if text_missing else (action.get("text") or "")
         # Click into the main editable text area first (Document/Edit), so keys
         # land in the body rather than after a tab/title click left focus elsewhere.
         editables = [e for e in elements if e.get("control_type") in ("Document", "Edit")]
@@ -76,19 +96,24 @@ def do_action(action, elements, target_procs=None):
         elif mode == "append":
             send_keys("^{END}")
         send_keys(text, with_spaces=True)
+        if text_missing:
+            return True, f'typed "" (mode={mode}; text missing)'
         return True, f'typed "{text}" (mode={mode})'
 
     if kind == "press":
-        key = action.get("key", "").lower()
+        if not action.get("key"):
+            return False, "press with no key"
+        key = str(action.get("key")).lower()
         keymap = {"enter": "{ENTER}", "tab": "{TAB}", "esc": "{ESC}",
                   "escape": "{ESC}", "space": "{SPACE}", "backspace": "{BACKSPACE}"}
         send_keys(keymap.get(key, key))
         return True, f"pressed {key}"
 
     if kind == "scroll":
-        amount = -400 if action.get("direction") == "down" else 400
+        direction = action.get("direction") or "down"
+        amount = -400 if direction == "down" else 400
         pyautogui.scroll(amount)
-        return True, f"scrolled {action.get('direction')}"
+        return True, f"scrolled {direction}"
 
     if kind == "done":
         return True, "done"

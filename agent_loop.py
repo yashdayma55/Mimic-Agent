@@ -22,11 +22,30 @@ try:
 except Exception:
     redact_image = None
 
+# Optional browser (DOM/CDP) perception — missing Playwright must not break native path
+try:
+    from browser_detect import is_browser_frontmost
+    from browser_perceive import perceive_browser
+    _browser_perceive_available = True
+except Exception:
+    is_browser_frontmost = None
+    perceive_browser = None
+    _browser_perceive_available = False
+
 
 def perceive(save_path="agent_view.png"):
     """PERCEIVE: capture the screen as a numbered element list + marked image,
     REDACTING sensitive fields (passwords, cards, etc.) before the image is saved
-    or sent to the model - same safety as Stage A. Returns (elements, image_path)."""
+    or sent to the model - same safety as Stage A. Returns (elements, image_path).
+
+    If Chrome is frontmost and CDP perception is available, use the DOM path
+    (real page links/buttons/inputs). Otherwise use the accessibility tree."""
+    if _browser_perceive_available and is_browser_frontmost():
+        try:
+            return perceive_browser(save_path=save_path)
+        except Exception as e:
+            print(f"   browser perceive failed ({e}); falling back to accessibility tree")
+
     elements = collect_clickable_elements()
     img, ox, oy, scale = grab_full_screen()
     for el in elements:
