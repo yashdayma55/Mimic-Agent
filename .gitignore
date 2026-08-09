@@ -16,3 +16,7 @@ adaptations.db
 corrections.db
 workflows/job_application.json
 agent_runs.log
+transcript.txt
+transcript.json
+workflows/harness_workflow1.json
+workflows/harness_demo_note.json
