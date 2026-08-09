@@ -17,10 +17,12 @@ from agent_reason import reason_next_action
 from agent_act import do_action
 
 try:
-    from config import MAX_STEPS, REQUIRE_APPROVAL
+    from config import MAX_STEPS, REQUIRE_APPROVAL, CLARIFY_ENABLED, CROSS_CALL_CHECK
 except Exception:
     MAX_STEPS = 8
     REQUIRE_APPROVAL = True
+    CLARIFY_ENABLED = True
+    CROSS_CALL_CHECK = False
 
 try:
     from prereq_reasoner import prepare_for
@@ -72,6 +74,71 @@ def _print_proposal(action, label="proposes"):
     print(f"  {label}: {action.get('action')} "
           f"{_action_detail(action)} "
           f"- {action.get('why','')}")
+
+
+def _apply_clarification(goal, elements, path, history, action):
+    """External uncertainty check + optional user disambiguation.
+
+    Runs AFTER the model proposes and BEFORE approval/act. Does not replace
+    the human approval gate.
+
+    Returns (status, action) where status is:
+      "ok"     — proceed (action may have a user-chosen id)
+      "skip"   — skip this step
+      "cancel" — stop the run safely
+    """
+    if not CLARIFY_ENABLED:
+        return "ok", action
+    kind = (action.get("action") or "").strip().lower()
+    if kind in ("done", "stuck", "wait", "copy", "paste"):
+        return "ok", action
+
+    try:
+        from uncertainty import assess_uncertainty
+        from clarify import ask_user_to_disambiguate
+    except Exception as e:
+        print(f"  [clarify] modules unavailable ({e}); continuing")
+        return "ok", action
+
+    try:
+        uncertain, reason, cands = assess_uncertainty(
+            action,
+            elements,
+            reason_fn=reason_next_action if CROSS_CALL_CHECK else None,
+            goal=goal,
+            image_path=path,
+            history=history,
+            run_cross_call=bool(CROSS_CALL_CHECK),
+        )
+    except Exception as e:
+        print(f"  [clarify] assess failed ({e}); continuing")
+        return "ok", action
+
+    if not uncertain:
+        return "ok", action
+
+    print(f"  [clarify] uncertain — {reason}")
+    choice = ask_user_to_disambiguate(
+        goal, elements, path, cands, reason
+    )
+    if choice == "skip":
+        print("  [clarify] user skipped this step")
+        return "skip", action
+    if choice == "cancel":
+        print("  [clarify] user cancelled the run")
+        return "cancel", action
+
+    # User picked an element id — override the click/type target
+    action = dict(action)
+    action["id"] = int(choice)
+    why = (action.get("why") or "").rstrip()
+    tag = f"[user chose id={choice}]"
+    action["why"] = f"{why} {tag}".strip() if why else tag
+    if action.get("action") not in ("click", "type"):
+        # clarification answered with an id — treat as click on that element
+        action["action"] = "click"
+    _print_proposal(action, label="clarified")
+    return "ok", action
 
 
 def _approve_or_correct(goal, elements, path, history, action, auto_approve):
@@ -341,6 +408,16 @@ def _run_goal_body(goal, max_steps, auto_approve, skip_prereqs, record_trace=Fal
             print(f"\n  the agent is STUCK: {action.get('why')}. stopping.")
             return _finish("stuck")
 
+        cstatus, action = _apply_clarification(
+            goal, elements, path, history, action
+        )
+        if cstatus == "cancel":
+            return _finish("stopped")
+        if cstatus == "skip":
+            history.append("note: user skipped an ambiguous step")
+            time.sleep(0.3)
+            continue
+
         status, action = _approve_or_correct(
             goal, elements, path, history, action, auto_approve
         )
@@ -381,6 +458,16 @@ def _run_goal_body(goal, max_steps, auto_approve, skip_prereqs, record_trace=Fal
             if retry.get("action") == "stuck":
                 print(f"\n  the agent is STUCK: {retry.get('why')}. stopping.")
                 return _finish("stuck")
+
+            cstatus, retry = _apply_clarification(
+                goal, elements, path, history, retry
+            )
+            if cstatus == "cancel":
+                return _finish("stopped")
+            if cstatus == "skip":
+                history.append("note: user skipped an ambiguous retry step")
+                time.sleep(0.3)
+                continue
 
             status, retry = _approve_or_correct(
                 goal, elements, path, history, retry, auto_approve

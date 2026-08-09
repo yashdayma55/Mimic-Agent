@@ -15,5 +15,9 @@ API_MODEL = "claude-sonnet-4-5"
 MAX_STEPS = 8            # hard ceiling on the goal-driven loop
 REQUIRE_APPROVAL = True  # human approves each action
 
+# uncertainty / clarification (Ask-F1 style external check)
+CLARIFY_ENABLED = True   # pause + ask user when targets are ambiguous
+CROSS_CALL_CHECK = False # if True, call reasoner twice (~2x cost) to detect disagreement
+
 # where the API key lives (gitignored)
 KEY_FILE = "my_key.txt"
