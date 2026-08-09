@@ -114,6 +114,58 @@ def _perceive_native(save_path):
     return elements, save_path
 
 
+def _has_useful_name(el):
+    """True if the element has a non-empty, non-generic accessibility name."""
+    name = (el.get("name") or "").strip()
+    if not name:
+        return False
+    # Ignore placeholder-ish names that don't help the model
+    low = name.lower()
+    if low in ("pane", "group", "custom", "window", "desktop"):
+        return False
+    return True
+
+
+def _native_tree_sparse(elements):
+    """True when the accessibility-tree result is unusable for reasoning.
+
+    Unusable = zero elements, or overwhelmingly unnamed / generic containers
+    (Pane/Group/Custom) so the model has almost nothing to choose by label.
+    """
+    if not elements:
+        return True
+    named = sum(1 for el in elements if _has_useful_name(el))
+    if named >= 3:
+        return False
+    # Few or no useful names: treat as sparse if most lack names
+    unnamed = len(elements) - named
+    if unnamed / max(len(elements), 1) >= 0.7:
+        return True
+    if named == 0:
+        return True
+    return False
+
+
+def _perceive_som_fallback(save_path):
+    """Stage A Set-of-Mark view of the CURRENT screen (redact then mark).
+
+    Reuses som_safe_pick.build_safe_marked_screenshot when available; otherwise
+    the same redact+mark path as _perceive_native. Never raises.
+    """
+    try:
+        from som_safe_pick import build_safe_marked_screenshot
+        elements, path = build_safe_marked_screenshot(save_path=save_path)
+        return elements or [], path
+    except Exception as e:
+        print(f"   [perceive] SoM safe fallback unavailable ({e}); "
+              f"rebuilding marked view via tree")
+        try:
+            return _perceive_native(save_path)
+        except Exception as e2:
+            print(f"   [perceive] SoM rebuild also failed ({e2})")
+            return [], save_path
+
+
 def perceive(save_path="agent_view.png", prefer_browser=False):
     """PERCEIVE: capture the screen as a numbered element list + marked image,
     REDACTING sensitive fields (passwords, cards, etc.) before the image is saved
@@ -129,7 +181,9 @@ def perceive(save_path="agent_view.png", prefer_browser=False):
     blank_tab=True — navigate still works.
 
     prefer_browser=False (native app goals): use browser DOM only when Chrome is
-    already frontmost; otherwise use the accessibility tree.
+    already frontmost; otherwise use the accessibility tree. If that tree is
+    empty or overwhelmingly unlabeled, fall back to a Set-of-Mark marked view
+    of the current screen so reason_next_action can still pick a number.
     """
     use_browser = prefer_browser or (
         _browser_perceive_available and is_browser_frontmost and is_browser_frontmost()
@@ -194,10 +248,26 @@ def perceive(save_path="agent_view.png", prefer_browser=False):
             "address_bar_focused": False,
         }
 
+    # ---- Native path (tree first; SoM fallback if sparse) ----
     print("[perceive] native tree")
     elements, path = _perceive_native(save_path)
-    return elements, path, {"mode": "native", "url": "", "title": "",
-                            "blank_tab": False, "address_bar_focused": False}
+    page_info = {"mode": "native", "url": "", "title": "",
+                 "blank_tab": False, "address_bar_focused": False}
+
+    if _native_tree_sparse(elements):
+        print("[perceive] native tree sparse -> vision (set-of-mark)")
+        som_elements, som_path = _perceive_som_fallback(save_path)
+        # Prefer SoM result when it gives anything usable; else keep tree result
+        if som_elements and (
+            not elements
+            or len(som_elements) >= len(elements)
+            or not _native_tree_sparse(som_elements)
+        ):
+            page_info["mode"] = "native_som"
+            return som_elements, som_path, page_info
+        print("[perceive] SoM fallback also sparse; keeping native tree result")
+
+    return elements, path, page_info
 
 
 def describe_perception(elements):
