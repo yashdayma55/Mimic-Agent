@@ -6,7 +6,7 @@ closed vocabulary (never a whole plan):
   {"action": "click", "id": <box number>, "why": "..."}
   {"action": "type",  "text": "...",      "why": "..."}
   {"action": "press", "key": "enter",     "why": "..."}
-  {"action": "scroll","direction":"down", "why": "..."}
+  {"action": "scroll","direction":"down", "to_find": "optional", "why": "..."}
   {"action": "navigate","url":"https://...","why":"..."}
   {"action": "switch_tab","match":"<title or url text>","why":"..."}
   {"action": "copy",  "why": "..."}
@@ -80,11 +80,11 @@ The screen has numbered red boxes on every clickable element. Here they are:
 {hist}
 
 Decide the SINGLE next action to move toward the goal. Do not plan ahead, just
-the one next action. To go to a website or URL, ALWAYS use the navigate action ({{"action":"navigate","url":"https://..."}}). Do NOT click or type in the browser address bar. The navigate action loads the page directly. Only interact with elements that are part of the web PAGE, never the browser's address bar or toolbar. To type text, prefer clicking the main editable text AREA (a Document or Edit element) rather than a tab or title, then use the type action. For typing, use type_mode "replace" to overwrite a field (default for form fields) or "append" to add to existing text. You may use navigate to go straight to a known URL rather than clicking through, switch_tab to move between open tabs, copy/paste to move text between fields, wait when a page is loading, and hotkey for keyboard combos (e.g. ^a, ^{{END}}). Only return done if the CURRENT screenshot visibly shows the goal is complete. Do not claim done based only on past actions in the history. Respond with ONLY a JSON object, one of:
+the one next action. To go to a website or URL, ALWAYS use the navigate action ({{"action":"navigate","url":"https://..."}}). Do NOT click or type in the browser address bar. The navigate action loads the page directly. Only interact with elements that are part of the web PAGE, never the browser's address bar or toolbar. To type text, prefer clicking the main editable text AREA (a Document or Edit element) rather than a tab or title, then use the type action. For typing, use type_mode "replace" to overwrite a field (default for form fields) or "append" to add to existing text. You may use navigate to go straight to a known URL rather than clicking through, switch_tab to move between open tabs, copy/paste to move text between fields, wait when a page is loading, and hotkey for keyboard combos (e.g. ^a, ^{{END}}). If a target is off-screen, use scroll with optional to_find (text of the target) so the page brings it into view; then click it on a later step. Only return done if the CURRENT screenshot visibly shows the goal is complete. Do not claim done based only on past actions in the history. Respond with ONLY a JSON object, one of:
 {{"action":"click","id":<number>,"why":"<short>"}}
 {{"action":"type","text":"<text>","type_mode":"<replace|append>","why":"<short>"}}
 {{"action":"press","key":"<enter|tab|esc|...>","why":"<short>"}}
-{{"action":"scroll","direction":"<up|down>","why":"<short>"}}
+{{"action":"scroll","direction":"<up|down>","to_find":"<optional off-screen target text>","why":"<short>"}}
 {{"action":"navigate","url":"https://...","why":"<short>"}}
 {{"action":"switch_tab","match":"<text in tab title or url>","why":"<short>"}}
 {{"action":"copy","why":"<short>"}}

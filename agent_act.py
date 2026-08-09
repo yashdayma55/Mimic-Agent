@@ -154,10 +154,67 @@ def _get_browser_page():
     return None
 
 
+def _scroll_into_view_if_needed(page, selector):
+    """Bring a browser element into view before click/type. Best-effort."""
+    if not page or not selector:
+        return
+    try:
+        page.locator(selector).scroll_into_view_if_needed(timeout=3000)
+    except Exception as e:
+        print(f"  [act] scroll_into_view skipped ({e})")
+
+
+def _browser_scroll_to_find(page, hint):
+    """Locate an element matching hint (possibly off-screen) and scroll it into view."""
+    if not page or not (hint or "").strip():
+        return False
+    hint = hint.strip()
+    # 1) Playwright text locator (sees off-screen nodes)
+    try:
+        loc = page.get_by_text(hint, exact=False).first
+        loc.scroll_into_view_if_needed(timeout=3000)
+        return True
+    except Exception:
+        pass
+    # 2) DOM scan + scrollIntoView (covers aria-label / placeholder / etc.)
+    try:
+        found = page.evaluate(
+            """(needle) => {
+                const n = String(needle || '').toLowerCase();
+                if (!n) return false;
+                const all = document.querySelectorAll(
+                    'a,button,input,textarea,select,[role],label,span,div,li,p,h1,h2,h3'
+                );
+                for (const el of all) {
+                    const label = (
+                        el.getAttribute('aria-label')
+                        || el.getAttribute('placeholder')
+                        || el.getAttribute('name')
+                        || el.getAttribute('title')
+                        || (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA'
+                            ? (el.value || '') : '')
+                        || (el.innerText || el.textContent || '')
+                    ).replace(/\\s+/g, ' ').trim().toLowerCase();
+                    if (label && label.includes(n)) {
+                        el.scrollIntoView({block: 'center', inline: 'nearest'});
+                        return true;
+                    }
+                }
+                return false;
+            }""",
+            hint,
+        )
+        return bool(found)
+    except Exception as e:
+        print(f"  [scroll] to_find failed: {e}")
+        return False
+
+
 def _browser_click_element(page, el, eid):
     """Click a browser element via Playwright selector; fall back to vx,vy."""
     sel = el.get("selector")
     if sel:
+        _scroll_into_view_if_needed(page, sel)
         try:
             page.click(sel, timeout=5000)
             return True, (
@@ -228,6 +285,7 @@ def _browser_type_into(page, el, text, mode):
     sel = el.get("selector")
     if not sel:
         return False, "no selector"
+    _scroll_into_view_if_needed(page, sel)
     try:
         if mode == "append":
             page.click(sel, timeout=5000)
@@ -320,6 +378,7 @@ def do_action(action, elements, target_procs=None, title_hint=None):
                 try:
                     page = _get_browser_page()
                     if page is not None:
+                        _scroll_into_view_if_needed(page, target["selector"])
                         page.click(target["selector"], timeout=5000)
                         time.sleep(0.2)
                     else:
@@ -367,6 +426,13 @@ def do_action(action, elements, target_procs=None, title_hint=None):
 
     if kind == "scroll":
         direction = action.get("direction") or "down"
+        to_find = (action.get("to_find") or "").strip()
+        if to_find:
+            page = _get_browser_page()
+            if page is not None:
+                if _browser_scroll_to_find(page, to_find):
+                    return True, f"scrolled into view to find '{to_find}'"
+                print(f"  [scroll] to_find '{to_find}' not located; plain scroll")
         amount = -400 if direction == "down" else 400
         pyautogui.scroll(amount)
         return True, f"scrolled {direction}"
