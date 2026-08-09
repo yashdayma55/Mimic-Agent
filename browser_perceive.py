@@ -4,7 +4,8 @@ Browser DOM perception via CDP (Playwright).
 Connection method (reuses the project's existing browser tier — do NOT duplicate):
   browser_locator.connect_browser() attaches with
   sync_playwright().chromium.connect_over_cdp("http://localhost:9222")
-  and _active_page() picks the frontmost/non-chrome:// tab.
+  and _active_page() / _pick_active_page() picks the visible real tab
+  (skips blank New Tab when any real URL exists).
   Same debug Chrome as prereq_reasoner browser_debug (--remote-debugging-port=9222).
 
 Returns element dicts shaped like the accessibility-tree set-of-mark list so the
@@ -29,9 +30,10 @@ try:
 except Exception:
     draw_marks = None
 
-# CSS selector for interactable page elements
+# CSS selector for interactable / clickable-ish page elements (incl. section headings)
 _INTERACTABLE = (
     "a, button, input, select, textarea, "
+    "h1, h2, h3, h4, h5, h6, [role='heading'], "
     "[role='button'], [role='link'], [role='textbox'], [role='combobox'], "
     "[role='checkbox'], [role='menuitem'], [role='tab'], "
     "[onclick], [contenteditable='true']"
@@ -43,6 +45,12 @@ _TAG_TO_CONTROL = {
     "input": "Edit",
     "select": "ComboBox",
     "textarea": "Edit",
+    "h1": "Header",
+    "h2": "Header",
+    "h3": "Header",
+    "h4": "Header",
+    "h5": "Header",
+    "h6": "Header",
 }
 
 # Tiny blank PNG reused when screenshot is skipped (downstream needs a path)
@@ -55,7 +63,7 @@ def _control_type(tag, role):
         role_map = {
             "button": "Button", "link": "Hyperlink", "textbox": "Edit",
             "combobox": "ComboBox", "checkbox": "CheckBox",
-            "menuitem": "MenuItem", "tab": "TabItem",
+            "menuitem": "MenuItem", "tab": "TabItem", "heading": "Header",
         }
         if role.lower() in role_map:
             return role_map[role.lower()]
@@ -106,24 +114,29 @@ def _viewport_screen_offset(page):
 
 
 def _collect_dom_elements(page, max_elems=80):
-    """Extract visible interactable DOM nodes; tag each with data-mimic-id.
+    """Extract interactable DOM nodes in/near the CURRENT viewport; retag live.
 
-    Numbering matches the element id shown to the model (1..N). Each raw item
-    includes mimic_id so we can build selector '[data-mimic-id=\"N\"]'.
+    Always re-runs page.evaluate (no cached element list). Uses live
+    getBoundingClientRect so positions track the current scroll.
+    Includes a small off-viewport margin so newly-scrolled content is picked up.
     """
+    # margin (px): include elements slightly outside the viewport after scroll
+    near = 120
     raw = page.evaluate(
-        """([sel, maxElems]) => {
-            // Clear prior tags from a previous perceive
+        """([sel, maxElems, near]) => {
+            // Clear prior tags from a previous perceive — always fresh
             for (const old of document.querySelectorAll('[data-mimic-id]')) {
                 old.removeAttribute('data-mimic-id');
             }
             const out = [];
             const seen = new Set();
+            const vh = window.innerHeight, vw = window.innerWidth;
             for (const el of document.querySelectorAll(sel)) {
                 const r = el.getBoundingClientRect();
                 if (r.width < 2 || r.height < 2) continue;
-                if (r.bottom < 0 || r.right < 0) continue;
-                if (r.top > window.innerHeight || r.left > window.innerWidth) continue;
+                // in or near viewport (margin lets post-scroll content appear)
+                if (r.bottom < -near || r.right < -near) continue;
+                if (r.top > vh + near || r.left > vw + near) continue;
                 const style = window.getComputedStyle(el);
                 if (style.visibility === 'hidden' || style.display === 'none') continue;
                 if (parseFloat(style.opacity || '1') === 0) continue;
@@ -152,9 +165,21 @@ def _collect_dom_elements(page, max_elems=80):
             }
             return out;
         }""",
-        [_INTERACTABLE, max_elems],
+        [_INTERACTABLE, max_elems, near],
     )
     return raw[:max_elems]
+
+
+def _page_scroll_pos(page):
+    """Live window.scrollX / scrollY (0,0 if unavailable)."""
+    try:
+        pos = page.evaluate(
+            "() => ({x: window.scrollX || window.pageXOffset || 0, "
+            "y: window.scrollY || window.pageYOffset || 0})"
+        )
+        return int(pos.get("x") or 0), int(pos.get("y") or 0)
+    except Exception:
+        return 0, 0
 
 
 def get_active_page():
@@ -224,6 +249,8 @@ def _is_blank_tab_url(url):
     return (
         not u
         or u == "about:blank"
+        or u.startswith("chrome://newtab")
+        or u.startswith("chrome://new-tab-page")
         or u.startswith("chrome://")
         or u.startswith("edge://")
     )
@@ -257,8 +284,10 @@ def perceive_browser(save_path="browser_view.png"):
 
     url, title = _page_url_title(page)
     blank_tab = _is_blank_tab_url(url)
+    scroll_x, scroll_y = _page_scroll_pos(page)
+    print(f"[browser] scrollY={scroll_y}")
 
-    # ---- 1. DOM elements first (this is what drives perception) ----
+    # ---- 1. DOM elements first (fresh evaluate every call; live rects) ----
     ox, oy, offset_ok = _viewport_screen_offset(page)
     try:
         raw = _collect_dom_elements(page)
@@ -279,6 +308,8 @@ def perceive_browser(save_path="browser_view.png"):
             "control_type": _control_type(item.get("tag"), item.get("role")),
             # viewport rect for draw_marks on the page screenshot (offset 0)
             "rect": (L, T, R, B),
+            # live bounding box after current scroll (same coords; explicit for callers)
+            "bounding_box": {"x": L, "y": T, "width": int(w), "height": int(h)},
             "sx": vx,
             "sy": vy,
             # screen center for pyautogui (offset applied; see TODO in _viewport_screen_offset)
@@ -308,6 +339,8 @@ def perceive_browser(save_path="browser_view.png"):
         "title": title,
         "blank_tab": blank_tab or _is_blank_tab_url(url),
         "address_bar_focused": False,
+        "scrollX": scroll_x,
+        "scrollY": scroll_y,
     }
 
     # ---- 2. Screenshot is optional / best-effort ----

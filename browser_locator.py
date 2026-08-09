@@ -61,11 +61,117 @@ def disconnect_browser():
         _pw = None
 
 
+def _url_of(page):
+    try:
+        return (page.url or "").strip()
+    except Exception:
+        return ""
+
+
+def _title_of(page):
+    try:
+        return (page.title() or "").strip()
+    except Exception:
+        return ""
+
+
+def _is_blank_url(url):
+    """True for empty / about:blank / chrome|edge internal pages (incl. New Tab)."""
+    u = (url or "").lower().strip()
+    return (
+        not u
+        or u == "about:blank"
+        or u.startswith("chrome://newtab")
+        or u.startswith("chrome://new-tab-page")
+        or u.startswith("chrome://")
+        or u.startswith("edge://")
+    )
+
+
+def _is_page_visible(page):
+    """Foreground tab in its window: document.visibilityState == 'visible'."""
+    try:
+        return page.evaluate("() => document.visibilityState") == "visible"
+    except Exception:
+        try:
+            return page.evaluate("document.visibilityState") == "visible"
+        except Exception:
+            return False
+
+
+def _pick_active_page(pages):
+    """Choose the best page to perceive/act on.
+
+    Ordering (after excluding blanks when any real URL exists):
+      visible & real-url  >  visible  >  real-url  >  anything
+    Among ties, prefer an OS-title match, else the last page in the list
+    (≈ most recently created/activated).
+    """
+    if not pages:
+        return None
+
+    real = [pg for pg in pages if not _is_blank_url(_url_of(pg))]
+    # Prefer real content tabs whenever any exist; only use blanks if that is all we have
+    pool = real if real else list(pages)
+
+    meta = []
+    for pg in pool:
+        url = _url_of(pg)
+        blank = _is_blank_url(url)
+        visible = _is_page_visible(pg)
+        if visible and not blank:
+            rank = 0
+        elif visible:
+            rank = 1
+        elif not blank:
+            rank = 2
+        else:
+            rank = 3
+        meta.append((rank, pg, url))
+
+    best_rank = min(m[0] for m in meta)
+    candidates = [m[1] for m in meta if m[0] == best_rank]
+
+    # Optional tie-break: match the OS-frontmost Chrome window title
+    chosen = None
+    try:
+        import win32gui
+        fg_title = win32gui.GetWindowText(win32gui.GetForegroundWindow()) or ""
+        tab_title = fg_title
+        for suffix in (" - Google Chrome", " - Chrome", " - Chromium", " - Microsoft Edge"):
+            if tab_title.endswith(suffix):
+                tab_title = tab_title[: -len(suffix)]
+                break
+        needle = tab_title.strip().lower()
+        # Never use a "New Tab" title to force a blank when real pages exist
+        if needle and needle not in ("new tab", "新标签页", "nouvel onglet"):
+            for pg in candidates:
+                if _title_of(pg).lower() == needle:
+                    chosen = pg
+                    break
+            if chosen is None:
+                for pg in candidates:
+                    pt = _title_of(pg).lower()
+                    if pt and (needle in pt or pt in needle):
+                        chosen = pg
+                        break
+    except Exception:
+        pass
+
+    if chosen is None:
+        chosen = candidates[-1]
+
+    url = _url_of(chosen)
+    title = _title_of(chosen) or "(no title)"
+    print(f"[browser] active page: {title!r} ({url or 'about:blank'})")
+    return chosen
+
+
 def _active_page():
     """Return the frontmost / best-guess page across all tabs.
 
-    Prefers the tab matching the foreground Chrome window title; otherwise the
-    most recently opened real (non-chrome://) page; otherwise the newest blank.
+    Prefers a visible real (non-blank) tab via document.visibilityState;
+    skips New Tab / chrome:// when any real page exists.
     """
     if not _browser or not _browser.contexts:
         return None
@@ -77,63 +183,7 @@ def _active_page():
             continue
     if not pages:
         return None
-
-    def _url_of(pg):
-        try:
-            return (pg.url or "").strip()
-        except Exception:
-            return ""
-
-    def _title_of(pg):
-        try:
-            return (pg.title() or "").strip()
-        except Exception:
-            return ""
-
-    def _is_blank(url):
-        u = (url or "").lower()
-        return (
-            not u
-            or u == "about:blank"
-            or u.startswith("chrome://")
-            or u.startswith("edge://")
-        )
-
-    # 1) Match the OS-frontmost Chrome window title to a tab
-    try:
-        import win32gui
-        fg_title = win32gui.GetWindowText(win32gui.GetForegroundWindow()) or ""
-        tab_title = fg_title
-        for suffix in (" - Google Chrome", " - Chrome", " - Chromium", " - Microsoft Edge"):
-            if tab_title.endswith(suffix):
-                tab_title = tab_title[: -len(suffix)]
-                break
-        needle = tab_title.strip().lower()
-        if needle:
-            # Exact title match first
-            for pg in pages:
-                if _title_of(pg).lower() == needle:
-                    return pg
-            # Fuzzy contains (e.g. truncated titles)
-            for pg in pages:
-                pt = _title_of(pg).lower()
-                if pt and (needle in pt or pt in needle):
-                    return pg
-            # New Tab with blank URL
-            if needle in ("new tab", "新标签页", "nouvel onglet"):
-                blanks = [pg for pg in pages if _is_blank(_url_of(pg))]
-                if blanks:
-                    return blanks[-1]
-    except Exception:
-        pass
-
-    # 2) Prefer real pages (last in list ≈ most recently created/navigated)
-    real = [pg for pg in pages if not _is_blank(_url_of(pg))]
-    if real:
-        return real[-1]
-
-    # 3) Only blanks / chrome:// — pick the newest
-    return pages[-1]
+    return _pick_active_page(pages)
 
 
 def is_browser_step(step):

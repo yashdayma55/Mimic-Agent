@@ -165,49 +165,81 @@ def _scroll_into_view_if_needed(page, selector):
 
 
 def _browser_scroll_to_find(page, hint):
-    """Locate an element matching hint (possibly off-screen) and scroll it into view."""
+    """Find a DOM node whose text/aria-label contains hint; scroll it into view.
+
+    Prefers headings and links with a short matching label over huge containers.
+    Returns True if an element was found and scrolled into view.
+    """
     if not page or not (hint or "").strip():
         return False
     hint = hint.strip()
-    # 1) Playwright text locator (sees off-screen nodes)
-    try:
-        loc = page.get_by_text(hint, exact=False).first
-        loc.scroll_into_view_if_needed(timeout=3000)
-        return True
-    except Exception:
-        pass
-    # 2) DOM scan + scrollIntoView (covers aria-label / placeholder / etc.)
+
+    # 1) Prefer compact DOM matches (headings / links / aria-label)
     try:
         found = page.evaluate(
             """(needle) => {
                 const n = String(needle || '').toLowerCase();
                 if (!n) return false;
-                const all = document.querySelectorAll(
-                    'a,button,input,textarea,select,[role],label,span,div,li,p,h1,h2,h3'
+                const maxLabel = Math.max(80, n.length * 8);
+                const nodes = document.querySelectorAll(
+                    'h1,h2,h3,h4,h5,h6,a,button,[role="heading"],[role="link"],'
+                    + '[aria-label],span,li,p,div,label'
                 );
-                for (const el of all) {
-                    const label = (
-                        el.getAttribute('aria-label')
-                        || el.getAttribute('placeholder')
-                        || el.getAttribute('name')
-                        || el.getAttribute('title')
-                        || (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA'
-                            ? (el.value || '') : '')
-                        || (el.innerText || el.textContent || '')
-                    ).replace(/\\s+/g, ' ').trim().toLowerCase();
-                    if (label && label.includes(n)) {
-                        el.scrollIntoView({block: 'center', inline: 'nearest'});
-                        return true;
-                    }
+                const scored = [];
+                for (const el of nodes) {
+                    const aria = (el.getAttribute('aria-label') || '')
+                        .replace(/\\s+/g, ' ').trim().toLowerCase();
+                    let text = (el.innerText || el.textContent || '')
+                        .replace(/\\s+/g, ' ').trim().toLowerCase();
+                    if (text.length > 240) text = text.slice(0, 240);
+                    const ariaHit = aria && aria.includes(n);
+                    const textHit = text && text.includes(n) && text.length <= maxLabel;
+                    if (!ariaHit && !textHit) continue;
+                    const tag = el.tagName.toLowerCase();
+                    let score = 0;
+                    if (['h1','h2','h3','h4','h5','h6'].includes(tag)
+                        || el.getAttribute('role') === 'heading') score += 100;
+                    if (tag === 'a' || el.getAttribute('role') === 'link') score += 50;
+                    if (tag === 'button' || el.getAttribute('role') === 'button') score += 40;
+                    const label = ariaHit ? aria : text;
+                    if (label === n) score += 30;
+                    else if (label.startsWith(n)) score += 15;
+                    score -= Math.min(label.length, 120);
+                    scored.push({el, score});
                 }
-                return false;
+                if (!scored.length) return false;
+                scored.sort((a, b) => b.score - a.score);
+                scored[0].el.scrollIntoView({block: 'center', inline: 'nearest'});
+                return true;
             }""",
             hint,
         )
-        return bool(found)
+        if found:
+            return True
     except Exception as e:
-        print(f"  [scroll] to_find failed: {e}")
+        print(f"  [scroll] to_find DOM scan failed: {e}")
+
+    # 2) Playwright text locator fallback
+    try:
+        loc = page.get_by_text(hint, exact=False).first
+        loc.scroll_into_view_if_needed(timeout=3000)
+        return True
+    except Exception:
         return False
+
+
+def _browser_page_scroll(page, direction, amount=600):
+    """Scroll the page document via CDP (reliable; does not need OS focus)."""
+    delta = amount if direction == "down" else -amount
+    page.evaluate(
+        """(dy) => { window.scrollBy(0, dy); }""",
+        delta,
+    )
+    try:
+        y = page.evaluate("() => window.scrollY || window.pageYOffset || 0")
+        print(f"  [scroll] page scrollY now {int(y)}")
+    except Exception:
+        pass
 
 
 def _browser_click_element(page, el, eid):
@@ -427,14 +459,39 @@ def do_action(action, elements, target_procs=None, title_hint=None):
     if kind == "scroll":
         direction = action.get("direction") or "down"
         to_find = (action.get("to_find") or "").strip()
-        if to_find:
+
+        # Prefer browser_perceive.get_active_page (same picker as perceive)
+        page = None
+        try:
+            from browser_perceive import get_active_page
+            page = get_active_page()
+        except Exception:
+            page = None
+        if page is None:
             page = _get_browser_page()
-            if page is not None:
-                if _browser_scroll_to_find(page, to_find):
-                    return True, f"scrolled into view to find '{to_find}'"
-                print(f"  [scroll] to_find '{to_find}' not located; plain scroll")
+
+        if to_find and page is not None:
+            if _browser_scroll_to_find(page, to_find):
+                return True, f"scrolled '{to_find}' into view"
+            # Not in DOM yet (lazy content) — incremental page scroll for next perceive
+            try:
+                _browser_page_scroll(page, direction, amount=700)
+                return True, f"scrolled {direction}, searching for '{to_find}'"
+            except Exception as e:
+                print(f"  [scroll] page scroll failed ({e}); falling back to OS scroll")
+
+        if page is not None and not to_find:
+            # Browser: scroll the document via CDP so the next perceive sees new content
+            try:
+                _browser_page_scroll(page, direction, amount=600)
+                return True, f"scrolled {direction}"
+            except Exception as e:
+                print(f"  [scroll] page scroll failed ({e}); falling back to OS scroll")
+
         amount = -400 if direction == "down" else 400
         pyautogui.scroll(amount)
+        if to_find:
+            return True, f"scrolled {direction}, searching for '{to_find}'"
         return True, f"scrolled {direction}"
 
     if kind == "navigate":
