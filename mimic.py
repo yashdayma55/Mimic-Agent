@@ -2,15 +2,21 @@
 MimicAgent front door — pick a saved workflow or give the agent a goal.
 """
 
+import os
+import sys
+import subprocess
+import sqlite3
+
 from menu import choose_and_run
 from agent_run import run_goal
 from trained_workflows import save_trained, list_trained, load_trained
 from auto_runner import run_trained
 from library import list_workflows
-from transcribe import transcribe
+from transcribe import transcribe, load_edited_transcript
 from harness_store import save_harness, load_harness, load_harness_steps, list_harness
 from harness import run_harness
 from harness_schema import step_from_dict
+from distill import distill_recording
 
 
 def _read_goal():
@@ -238,6 +244,144 @@ def _run_harness_workflow():
           f"{oks} ok/done ===")
 
 
+def _clear_recording_db(db_path="recording.db"):
+    """Start a fresh capture so a new record session does not mix old events."""
+    if not os.path.isfile(db_path):
+        return
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.execute("DELETE FROM events")
+        conn.commit()
+        conn.close()
+        print(f"  cleared prior events in {db_path}")
+    except Exception as e:
+        print(f"  (could not clear {db_path}: {e}; continuing)")
+
+
+def _record_transcribe_edit_run():
+    """Option 8: record -> distill -> transcribe -> edit pause -> run_harness."""
+    print("\n=== Record, transcribe, edit, then run ===")
+    print("  1) Demonstrate the workflow (Esc stops the recorder).")
+    print("  2) A transcript will be written for you to edit.")
+    print("  3) Press Enter here when done editing; harness runs with approval.\n")
+    ready = input("  Ready to record? (y/n): ").strip().lower()
+    if ready != "y":
+        print("cancelled.")
+        return
+
+    _clear_recording_db("recording.db")
+    recorder = os.path.join(os.path.dirname(os.path.abspath(__file__)) or ".",
+                            "mini_recorder.py")
+    print("\n  Starting recorder in a subprocess (press Esc when finished)...\n")
+    try:
+        rc = subprocess.call([sys.executable, recorder], cwd=os.path.dirname(recorder) or ".")
+    except Exception as e:
+        print(f"  recorder failed to start: {e}")
+        return
+    if rc not in (0, None):
+        print(f"  recorder exited with code {rc}")
+
+    if not os.path.isfile("recording.db"):
+        print("  no recording.db found after recording. aborting.")
+        return
+
+    print("\n  Distilling recording -> plan.json ...")
+    try:
+        distill_recording("recording.db", "plan.txt", "plan.json")
+    except Exception as e:
+        print(f"  distill failed: {e}")
+        return
+
+    out_txt = "transcript.txt"
+    out_json = "transcript.json"
+    print("\n  Transcribing plan.json -> transcript ...")
+    try:
+        steps, declared = transcribe("plan.json", out_txt=out_txt, out_json=out_json)
+    except Exception as e:
+        print(f"  transcribe failed: {e}")
+        return
+    if not steps:
+        print("  transcript has no steps. aborting.")
+        return
+
+    print(f"\n  Edit the transcript, then come back here:")
+    print(f"    {os.path.abspath(out_txt)}")
+    if declared:
+        print(f"  Declared INPUTS: {', '.join('{'+x+'}' for x in declared)}")
+    try:
+        input("\n  Press Enter when you are done editing (or Ctrl+C to cancel)... ")
+    except (EOFError, KeyboardInterrupt):
+        print("\ncancelled.")
+        return
+
+    try:
+        steps, declared = load_edited_transcript(out_txt, out_json)
+    except Exception as e:
+        print(f"  failed to load edited transcript: {e}")
+        return
+    if not steps:
+        print("  no steps after edit. aborting.")
+        return
+
+    inputs = _prompt_inputs(declared)
+    print(f"\n  Running harness ({len(steps)} steps) with approval on each action.\n")
+    transcript = run_harness(steps, inputs=inputs, require_approval=True)
+    oks = sum(1 for t in transcript if t.get("ok") or t.get("outcome") == "done")
+    print(f"\n=== harness run ended: {len(transcript)} records, "
+          f"{oks} ok/done ===")
+
+    ans = input("\n  save this harness workflow for later? (y/n): ").strip().lower()
+    if ans == "y":
+        name = input("  name: ").strip()
+        if name:
+            try:
+                stem = save_harness(name, steps, inputs=declared)
+                print(f"  saved as '{stem}'. Run later with option 7.")
+            except FileExistsError as e:
+                ow = input(f"  {e}\n  overwrite? (y/n): ").strip().lower()
+                if ow == "y":
+                    stem = save_harness(name, steps, inputs=declared, overwrite=True)
+                    print(f"  overwritten '{stem}'.")
+                else:
+                    print("  not saved.")
+        else:
+            print("  no name — not saving.")
+
+
+def _open_visual_editor():
+    """Option 9: start the local review UI server and print its URL."""
+    root = os.path.dirname(os.path.abspath(__file__)) or "."
+    server_py = os.path.join(root, "review_server.py")
+    if not os.path.isfile(server_py):
+        print(f"  missing {server_py}")
+        return
+    url = "http://127.0.0.1:8765/"
+    print("\n=== Visual workflow editor ===")
+    print(f"  Open this URL in your browser:\n    {url}")
+    print("  Save / Run from the page; approvals still appear in this terminal.")
+    print("  Press Enter here to stop the server and return to the menu.\n")
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, "-u", server_py],
+            cwd=root,
+        )
+    except Exception as e:
+        print(f"  could not start review_server: {e}")
+        return
+    try:
+        input()
+    except (EOFError, KeyboardInterrupt):
+        print()
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except Exception:
+                proc.kill()
+        print("  editor stopped.")
+
+
 def main():
     while True:
         print("\n=== MimicAgent ===")
@@ -248,6 +392,8 @@ def main():
         print("  5. Run a trained workflow (auto)")
         print("  6. Transcribe a recording into an editable workflow")
         print("  7. Run a harness workflow")
+        print("  8. Record, transcribe, edit, then run")
+        print("  9. Open visual workflow editor")
         print("  0. Quit")
         choice = input("\nchoice: ").strip()
 
@@ -270,6 +416,10 @@ def main():
             _transcribe_recording()
         elif choice == "7":
             _run_harness_workflow()
+        elif choice == "8":
+            _record_transcribe_edit_run()
+        elif choice == "9":
+            _open_visual_editor()
         elif choice == "0":
             print("bye.")
             break

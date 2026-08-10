@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MimicAgent — Visual Workflow Review</title>
+  <style>
+    :root {
+      --bg: #f4f5f7;
+      --surface: #ffffff;
+      --ink: #1a1d23;
+      --muted: #5c6570;
+      --line: #e2e5ea;
+      --accent: #1f6feb;
+      --accent-soft: #e8f0fe;
+      --danger: #b42318;
+      --danger-soft: #fef3f2;
+      --browser: #0e7490;
+      --native: #7c3aed;
+      --reason: #b45309;
+      --shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 4px 12px rgba(16, 24, 40, 0.04);
+      --radius: 12px;
+      --font: "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: var(--font);
+      font-size: 15px;
+      line-height: 1.45;
+    }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      background: rgba(255, 255, 255, 0.92);
+      backdrop-filter: blur(8px);
+      border-bottom: 1px solid var(--line);
+      padding: 0.85rem 1.5rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+    .brand {
+      display: flex;
+      flex-direction: column;
+      gap: 0.15rem;
+    }
+    .brand h1 {
+      margin: 0;
+      font-size: 1.15rem;
+      font-weight: 650;
+      letter-spacing: -0.02em;
+    }
+    .brand .sub {
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+    .actions {
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+    button {
+      font: inherit;
+      cursor: pointer;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      color: var(--ink);
+      padding: 0.55rem 0.95rem;
+      font-weight: 560;
+      transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+    }
+    button:hover { background: #f8f9fb; }
+    button:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+    button.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    button.primary:hover { background: #1a5fd0; }
+    button.ghost { background: transparent; }
+
+    main {
+      max-width: 880px;
+      margin: 0 auto;
+      padding: 1.25rem 1.25rem 4rem;
+    }
+
+    #status {
+      margin: 0 0 1rem;
+      padding: 0.75rem 1rem;
+      border-radius: 8px;
+      background: var(--accent-soft);
+      color: #1849a9;
+      font-size: 0.9rem;
+      display: none;
+    }
+    #status.show { display: block; }
+    #status.error {
+      background: var(--danger-soft);
+      color: var(--danger);
+    }
+    #status.ok {
+      background: #ecfdf3;
+      color: #067647;
+    }
+
+    #list {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 1rem 1.1rem 1.15rem;
+      display: grid;
+      grid-template-columns: 168px 1fr;
+      gap: 1rem;
+      transition: opacity 0.15s ease, border-color 0.15s ease;
+    }
+    .card.deleted {
+      opacity: 0.45;
+      border-style: dashed;
+    }
+    .card-media {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+    .thumb-wrap {
+      width: 168px;
+      height: 110px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: #eef0f3;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: zoom-in;
+      position: relative;
+    }
+    .thumb-wrap.empty {
+      cursor: default;
+      color: var(--muted);
+      font-size: 0.78rem;
+      text-align: center;
+      padding: 0.5rem;
+    }
+    .thumb-wrap img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .card-body {
+      display: flex;
+      flex-direction: column;
+      gap: 0.65rem;
+      min-width: 0;
+    }
+    .card-head {
+      display: flex;
+      align-items: center;
+      gap: 0.55rem;
+      flex-wrap: wrap;
+    }
+    .step-num {
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      color: var(--ink);
+    }
+    .badge {
+      font-size: 0.72rem;
+      font-weight: 650;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      padding: 0.18rem 0.5rem;
+      border-radius: 999px;
+      border: 1px solid transparent;
+    }
+    .badge.browser {
+      color: var(--browser);
+      background: #ecfeff;
+      border-color: #a5f3fc;
+    }
+    .badge.native {
+      color: var(--native);
+      background: #f5f3ff;
+      border-color: #ddd6fe;
+    }
+    .badge.reason {
+      color: var(--reason);
+      background: #fffbeb;
+      border-color: #fde68a;
+    }
+    label.field {
+      display: flex;
+      flex-direction: column;
+      gap: 0.3rem;
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: var(--muted);
+    }
+    textarea {
+      font: inherit;
+      color: var(--ink);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 0.55rem 0.65rem;
+      resize: vertical;
+      min-height: 2.6rem;
+      background: #fafbfc;
+    }
+    textarea:focus {
+      outline: 2px solid var(--accent-soft);
+      border-color: var(--accent);
+      background: #fff;
+    }
+    textarea.desc { min-height: 3.4rem; }
+    textarea.note { min-height: 2.4rem; }
+    .card-foot {
+      display: flex;
+      justify-content: flex-end;
+    }
+    .card-foot button.delete-btn {
+      border-color: transparent;
+      color: var(--danger);
+      background: transparent;
+      font-size: 0.85rem;
+      padding: 0.35rem 0.55rem;
+    }
+    .card-foot button.delete-btn:hover {
+      background: var(--danger-soft);
+    }
+    .card.deleted .delete-btn {
+      color: var(--accent);
+    }
+
+    /* Lightbox */
+    #lightbox {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 50;
+      background: rgba(15, 23, 42, 0.72);
+      align-items: center;
+      justify-content: center;
+      padding: 1.5rem;
+      cursor: zoom-out;
+    }
+    #lightbox.show { display: flex; }
+    #lightbox img {
+      max-width: min(960px, 94vw);
+      max-height: 88vh;
+      border-radius: 10px;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.35);
+      background: #111;
+    }
+
+    @media (max-width: 640px) {
+      .card {
+        grid-template-columns: 1fr;
+      }
+      .thumb-wrap { width: 100%; height: 160px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <h1>MimicAgent Workflow Review</h1>
+      <div class="sub" id="meta">Loading steps…</div>
+    </div>
+    <div class="actions">
+      <button type="button" class="ghost" id="btn-record" title="Recording stays in the terminal for v1">Record New</button>
+      <button type="button" id="btn-save">Save</button>
+      <button type="button" class="primary" id="btn-run">Run</button>
+    </div>
+  </header>
+
+  <main>
+    <div id="status" role="status"></div>
+    <div id="list"></div>
+  </main>
+
+  <div id="lightbox" aria-hidden="true"><img alt="Step screenshot enlarged" /></div>
+
+  <script>
+    (function () {
+      "use strict";
+
+      var steps = [];
+      var listEl = document.getElementById("list");
+      var metaEl = document.getElementById("meta");
+      var statusEl = document.getElementById("status");
+      var lightbox = document.getElementById("lightbox");
+      var lightboxImg = lightbox.querySelector("img");
+
+      function setStatus(msg, kind) {
+        if (!msg) {
+          statusEl.className = "";
+          statusEl.textContent = "";
+          return;
+        }
+        statusEl.textContent = msg;
+        statusEl.className = "show" + (kind ? " " + kind : "");
+      }
+
+      function collectFromDom() {
+        var cards = listEl.querySelectorAll(".card");
+        var out = [];
+        cards.forEach(function (card) {
+          var idx = parseInt(card.getAttribute("data-index"), 10);
+          var kind = card.getAttribute("data-kind") || "reason";
+          var desc = card.querySelector(".desc").value;
+          var note = card.querySelector(".note").value;
+          var deleted = card.classList.contains("deleted");
+          out.push({
+            index: idx,
+            kind: kind,
+            description: desc,
+            editable_note: note,
+            deleted: deleted,
+            screenshot_url: card.getAttribute("data-shot") || null
+          });
+        });
+        return out;
+      }
+
+      function openLightbox(src) {
+        if (!src) return;
+        lightboxImg.src = src;
+        lightbox.classList.add("show");
+        lightbox.setAttribute("aria-hidden", "false");
+      }
+
+      function closeLightbox() {
+        lightbox.classList.remove("show");
+        lightbox.setAttribute("aria-hidden", "true");
+        lightboxImg.removeAttribute("src");
+      }
+
+      lightbox.addEventListener("click", closeLightbox);
+      document.addEventListener("keydown", function (e) {
+        if (e.key === "Escape") closeLightbox();
+      });
+
+      function render() {
+        listEl.innerHTML = "";
+        if (!steps.length) {
+          metaEl.textContent = "No steps loaded";
+          listEl.innerHTML = "<p style='color:var(--muted)'>No workflow steps found. Transcribe a recording first, then refresh.</p>";
+          return;
+        }
+        var withShot = steps.filter(function (s) { return s.screenshot_url; }).length;
+        metaEl.textContent = steps.length + " steps · " + withShot + " with screenshots";
+
+        steps.forEach(function (s) {
+          var card = document.createElement("article");
+          card.className = "card" + (s.deleted ? " deleted" : "");
+          card.setAttribute("data-index", String(s.index));
+          card.setAttribute("data-kind", s.kind || "reason");
+          if (s.screenshot_url) card.setAttribute("data-shot", s.screenshot_url);
+
+          var media = document.createElement("div");
+          media.className = "card-media";
+          var thumb = document.createElement("div");
+          if (s.screenshot_url) {
+            thumb.className = "thumb-wrap";
+            var img = document.createElement("img");
+            img.src = s.screenshot_url;
+            img.alt = "Step " + s.index + " screenshot";
+            img.loading = "lazy";
+            thumb.appendChild(img);
+            thumb.addEventListener("click", function () {
+              openLightbox(s.screenshot_url);
+            });
+          } else {
+            thumb.className = "thumb-wrap empty";
+            thumb.textContent = "No screenshot";
+          }
+          media.appendChild(thumb);
+
+          var body = document.createElement("div");
+          body.className = "card-body";
+
+          var head = document.createElement("div");
+          head.className = "card-head";
+          var num = document.createElement("span");
+          num.className = "step-num";
+          num.textContent = "Step " + s.index;
+          var badge = document.createElement("span");
+          var kind = (s.kind || "reason").toLowerCase();
+          badge.className = "badge " + kind;
+          badge.textContent = kind;
+          head.appendChild(num);
+          head.appendChild(badge);
+
+          var descLab = document.createElement("label");
+          descLab.className = "field";
+          descLab.textContent = "Description";
+          var desc = document.createElement("textarea");
+          desc.className = "desc";
+          desc.rows = 2;
+          desc.value = s.description || "";
+          descLab.appendChild(desc);
+
+          var noteLab = document.createElement("label");
+          noteLab.className = "field";
+          noteLab.textContent = "Extra notes / improve this step";
+          var note = document.createElement("textarea");
+          note.className = "note";
+          note.rows = 2;
+          note.placeholder = "Optional guidance the agent should follow…";
+          note.value = s.editable_note || "";
+          noteLab.appendChild(note);
+
+          var foot = document.createElement("div");
+          foot.className = "card-foot";
+          var delBtn = document.createElement("button");
+          delBtn.type = "button";
+          delBtn.className = "delete-btn";
+          delBtn.textContent = s.deleted ? "Undo delete" : "Delete step";
+          delBtn.addEventListener("click", function () {
+            card.classList.toggle("deleted");
+            var nowDeleted = card.classList.contains("deleted");
+            delBtn.textContent = nowDeleted ? "Undo delete" : "Delete step";
+          });
+          foot.appendChild(delBtn);
+
+          body.appendChild(head);
+          body.appendChild(descLab);
+          body.appendChild(noteLab);
+          body.appendChild(foot);
+
+          card.appendChild(media);
+          card.appendChild(body);
+          listEl.appendChild(card);
+        });
+      }
+
+      function loadSteps() {
+        setStatus("Loading steps…");
+        return fetch("/api/steps")
+          .then(function (r) { return r.json(); })
+          .then(function (data) {
+            if (!data.ok) throw new Error(data.error || "failed to load steps");
+            steps = data.steps || [];
+            render();
+            setStatus("");
+          })
+          .catch(function (err) {
+            setStatus("Could not load steps: " + err.message, "error");
+            metaEl.textContent = "Load failed";
+          });
+      }
+
+      function saveSteps() {
+        var payload = { steps: collectFromDom() };
+        setStatus("Saving…");
+        document.getElementById("btn-save").disabled = true;
+        return fetch("/api/save", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (data) {
+            if (!data.ok) throw new Error(data.error || "save failed");
+            setStatus("Saved " + (data.steps != null ? data.steps : "") + " steps to transcript.json", "ok");
+            return data;
+          })
+          .catch(function (err) {
+            setStatus("Save failed: " + err.message, "error");
+            throw err;
+          })
+          .finally(function () {
+            document.getElementById("btn-save").disabled = false;
+          });
+      }
+
+      function runWorkflow() {
+        document.getElementById("btn-run").disabled = true;
+        setStatus("Saving before run…");
+        saveSteps()
+          .then(function () {
+            setStatus("Starting run…");
+            return fetch("/api/run", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ require_approval: true })
+            }).then(function (r) { return r.json(); });
+          })
+          .then(function (data) {
+            if (!data.ok) throw new Error(data.error || "run failed");
+            setStatus(
+              "Running — watch the terminal for approvals (y / s / correction).",
+              "ok"
+            );
+          })
+          .catch(function (err) {
+            setStatus("Run failed: " + err.message, "error");
+          })
+          .finally(function () {
+            document.getElementById("btn-run").disabled = false;
+          });
+      }
+
+      document.getElementById("btn-save").addEventListener("click", function () {
+        saveSteps().catch(function () {});
+      });
+      document.getElementById("btn-run").addEventListener("click", runWorkflow);
+      document.getElementById("btn-record").addEventListener("click", function () {
+        setStatus(
+          "Record New: use the MimicAgent terminal (option 8 or the recorder) for now. Refresh this page after you transcribe.",
+          ""
+        );
+      });
+
+      loadSteps();
+    })();
+  </script>
+</body>
+</html>
