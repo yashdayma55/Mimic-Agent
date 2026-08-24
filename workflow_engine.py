@@ -18,6 +18,7 @@ import sys
 from pywinauto import Desktop
 from pywinauto.keyboard import send_keys
 from locator import locate
+from safety_gate import require_irreversible_confirmation
 
 
 _last_window_title = {"title": ""}
@@ -107,7 +108,7 @@ def _handle_failure(step, on_fail):
     return "skip"
 
 
-def run_plan(steps, require_approval=True, on_fail="ask"):
+def run_plan(steps, require_approval=True, on_fail="ask", start_index=0):
     """Run steps. Returns (ran, skipped).
     on_fail controls what happens when a step can't find its element:
       'ask'  -> pause and ask the human (default, interactive)
@@ -116,7 +117,10 @@ def run_plan(steps, require_approval=True, on_fail="ask"):
     The key robustness idea: a failure is handled explicitly, not ignored,
     so it cannot silently cascade into every following step."""
     ran, skipped = [], []
-    i = 0
+    start_index = max(0, min(int(start_index or 0), len(steps)))
+    if start_index > 0:
+        log(f"[plan] starting at step {start_index + 1} (skipping first {start_index})")
+    i = start_index
     while i < len(steps):
         step = steps[i]
         instr = step.get("instruction", step.get("action", "step"))
@@ -132,6 +136,10 @@ def run_plan(steps, require_approval=True, on_fail="ask"):
                 skipped.append(instr)
                 i += 1
                 continue
+
+        if not require_irreversible_confirmation(step):
+            log("   stopping at irreversible step.")
+            break
 
         outcome = _do_step(step)
 

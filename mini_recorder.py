@@ -8,33 +8,60 @@ Merges all five exercises:
   Ex4 SQLite (WAL)            -> persist everything durably
   Ex5 queue + writer thread   -> keep the mouse smooth (producer/consumer)
 
-Architecture (say it out loud):bihi
-  listeners catch events -> queue passes them safely ->
-  writer thread saves events + screenshots + UI-element info into SQLite.
+Usage:
+  python mini_recorder.py [workflow_dir]
+
+  workflow_dir defaults to cwd. DB -> <dir>/recording.db,
+  screenshots -> <dir>/captures/click_<ts>.png
 """
 
 import queue
 import threading
 import time
 import os
+import sys
 import sqlite3
 from pynput import mouse, keyboard
 from pywinauto import Desktop
 import mss
 import mss.tools
 
-os.makedirs("captures", exist_ok=True)
-
 q = queue.Queue()
-mouse_listener = None  # declared early: on_press references it before its real assignment
+mouse_listener = None
+keyboard_listener = None
+_workflow_dir = "."
 
 
-# ---------------- PRODUCERS: callbacks do almost nothing ----------------
-# They run inside the OS input pipeline, so they must return instantly.
-# All they do is drop a tiny dict into the queue.
+def run_recorder(workflow_dir="."):
+    """Record clicks/keys into workflow_dir/recording.db and workflow_dir/captures/."""
+    global mouse_listener, keyboard_listener, _workflow_dir
+    _workflow_dir = os.path.abspath(workflow_dir or ".")
+    captures = os.path.join(_workflow_dir, "captures")
+    os.makedirs(captures, exist_ok=True)
+    db_path = os.path.join(_workflow_dir, "recording.db")
 
-def on_click(x, y, button, pressed):
-    if pressed:  # keep only the press, not the release
+    t = threading.Thread(
+        target=_writer,
+        args=(db_path, captures),
+        daemon=True,
+    )
+    t.start()
+
+    mouse_listener = mouse.Listener(on_click=_on_click)
+    keyboard_listener = keyboard.Listener(on_press=_on_press)
+    mouse_listener.start()
+    keyboard_listener.start()
+
+    print(f"recording into {_workflow_dir} ... press Esc to stop")
+    keyboard_listener.join()
+
+    q.put(None)
+    t.join()
+    print(f"stopped cleanly — db: {db_path}")
+
+
+def _on_click(x, y, button, pressed):
+    if pressed:
         q.put({
             "kind": "click",
             "ts": time.time(),
@@ -43,29 +70,24 @@ def on_click(x, y, button, pressed):
             "button": str(button),
         })
 
-def on_press(key):
+
+def _on_press(key):
     q.put({
         "kind": "key",
         "ts": time.time(),
         "key": str(key),
     })
     if key == keyboard.Key.esc:
-        mouse_listener.stop()  # stop the OTHER listener too
-        return False           # stop THIS listener
+        if mouse_listener:
+            mouse_listener.stop()
+        return False
 
 
-# ---------------- CONSUMER: the writer thread does all slow work ----------------
-# UIA lookup (~100ms), screenshot + PNG encode (~150ms), and DB insert all
-# happen HERE, off the input pipeline — so the user's mouse never lags.
-
-def writer():
-    # Heavy resources are created INSIDE this thread (thread-affinity):
-    #   - mss is not thread-safe
-    #   - a sqlite3 connection belongs to the thread that made it
+def _writer(db_path, captures_dir):
     desktop = Desktop(backend="uia")
     sct = mss.MSS()
 
-    conn = sqlite3.connect("recording.db")
+    conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("""
     CREATE TABLE IF NOT EXISTS events (
@@ -87,34 +109,34 @@ def writer():
               "VALUES (?,?,?,?,?,?,?,?,?)")
 
     while True:
-        e = q.get()          # sleeps until an event arrives
-        if e is None:        # poison pill -> shut down
+        e = q.get()
+        if e is None:
             break
 
         if e["kind"] == "click":
-            # WHICH element? (Ex2)
             try:
                 info = desktop.from_point(e["x"], e["y"]).element_info
                 name, ctype = info.name, str(info.control_type)
             except Exception:
-                name, ctype = "", ""   # empty-tree case: screenshot covers us
+                name, ctype = "", ""
 
-            # WHAT was on screen? (Ex3)
-            path = f"captures/click_{e['ts']:.3f}.png"
+            fname = f"click_{e['ts']:.3f}.png"
+            path = os.path.join(captures_dir, fname)
+            rel_path = os.path.join("captures", fname)
             try:
                 img = sct.grab(sct.monitors[1])
                 mss.tools.to_png(img.rgb, img.size, output=path)
             except Exception:
                 path = None
+                rel_path = None
 
-            # PERSIST (Ex4)
             conn.execute(INSERT, (e["ts"], "click", e["x"], e["y"],
-                                  e["button"], None, name, ctype, path))
+                                  e["button"], None, name, ctype, rel_path))
             conn.commit()
             print(f"{e['ts']:.3f}  CLICK ({e['x']},{e['y']}) {e['button']} "
                   f"-> '{name}' {ctype}  [saved]")
 
-        else:  # key
+        else:
             conn.execute(INSERT, (e["ts"], "key", None, None,
                                   None, e["key"], None, None, None))
             conn.commit()
@@ -123,22 +145,9 @@ def writer():
         q.task_done()
 
     conn.close()
-    print(f"(writer thread closed the database)")
+    print("(writer thread closed the database)")
 
 
-# ---------------- WIRING IT ALL TOGETHER ----------------
-
-t = threading.Thread(target=writer, daemon=True)
-t.start()
-
-mouse_listener = mouse.Listener(on_click=on_click)
-keyboard_listener = keyboard.Listener(on_press=on_press)
-mouse_listener.start()
-keyboard_listener.start()
-
-print("recording... press Esc to stop")
-keyboard_listener.join()   # main parks here until Esc
-
-q.put(None)   # poison pill AFTER listeners have stopped
-t.join()      # wait for the writer to drain & close cleanly
-print("stopped cleanly — open recording.db in DB Browser to see your workflow")
+if __name__ == "__main__":
+    wf_dir = sys.argv[1] if len(sys.argv) > 1 else "."
+    run_recorder(wf_dir)

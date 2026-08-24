@@ -29,6 +29,8 @@ try:
 except Exception:
     prepare_for = None
 
+from safety_gate import require_irreversible_confirmation, harness_step_check
+
 
 def _append_run_log(goal, outcome, steps):
     """Append one line summarizing the run. Never raises."""
@@ -431,6 +433,10 @@ def _run_goal_body(goal, max_steps, auto_approve, skip_prereqs, record_trace=Fal
             return _finish("stuck")
 
         title_hint = _ensure_target_focus(goal, target_procs, page_info)
+        if not require_irreversible_confirmation(
+            harness_step_check(None, action=action, description=goal)
+        ):
+            return _finish("stopped_irreversible")
         ok, msg = do_action(
             action, elements, target_procs=target_procs, title_hint=title_hint
         )
@@ -482,6 +488,10 @@ def _run_goal_body(goal, max_steps, auto_approve, skip_prereqs, record_trace=Fal
                 return _finish("stuck")
 
             title_hint = _ensure_target_focus(goal, target_procs, page_info)
+            if not require_irreversible_confirmation(
+                harness_step_check(None, action=retry, description=goal)
+            ):
+                return _finish("stopped_irreversible")
             ok2, msg2 = do_action(
                 retry, elements, target_procs=target_procs, title_hint=title_hint
             )

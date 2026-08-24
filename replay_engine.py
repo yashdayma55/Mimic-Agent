@@ -9,6 +9,7 @@ from typing import TypedDict
 from locator import locate
 from correction import handle_correction
 from memory import open_memory, remember, recall
+from safety_gate import require_irreversible_confirmation
 
 
 # ---- global hotkey approval fallback: Enter=approve, Esc=reject ----
@@ -104,6 +105,10 @@ def act_node(state):
         return state
     step = state["plan"][state["step_index"]]
 
+    if not require_irreversible_confirmation(step):
+        state["done"] = True
+        return state
+
     if step.get("_skip"):
         print("   >>> SKIPPED (corrected to skip)")
         return state
@@ -195,10 +200,23 @@ test_plan = [
      "elem_name": "Email", "text": "original text"},
 ]
 
+def make_initial_state(plan, start_index=0):
+    """Build replay state; start_index is 0-based."""
+    start_index = max(0, min(int(start_index or 0), len(plan)))
+    return {
+        "plan": plan,
+        "step_index": start_index,
+        "done": False,
+        "approved": False,
+        "last_window_title": "",
+        "found": False,
+        "missing_choice": "",
+        "target_rect": [],
+    }
+
+
 config = {"configurable": {"thread_id": "test-run-1"}}
-state = {"plan": test_plan, "step_index": 0, "done": False,
-         "approved": False, "last_window_title": "",
-         "found": False, "missing_choice": "", "target_rect": []}
+state = make_initial_state(test_plan, start_index=0)
 
 print("=== Starting replay (Phase 5: correction + memory) ===")
 result = app.invoke(state, config=config)

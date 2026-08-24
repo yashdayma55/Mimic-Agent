@@ -1,0 +1,32 @@
+{
+  "steps": [
+    {
+      "index": 0,
+      "kind": "reason",
+      "description": "edited via http",
+      "instruction": "",
+      "screenshot_url": null,
+      "inputs": [],
+      "outputs": [],
+      "deleted": false,
+      "action": null,
+      "target_name": null,
+      "target_type": null,
+      "goal": "noop"
+    },
+    {
+      "index": 1,
+      "kind": "reason",
+      "description": "inserted via http",
+      "instruction": "inserted via http",
+      "screenshot_url": null,
+      "inputs": [],
+      "outputs": [],
+      "deleted": false,
+      "action": null,
+      "target_name": null,
+      "target_type": null,
+      "goal": "inserted via http"
+    }
+  ]
+}

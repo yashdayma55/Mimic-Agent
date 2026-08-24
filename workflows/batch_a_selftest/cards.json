@@ -1,0 +1,98 @@
+{
+  "steps": [
+    {
+      "index": 0,
+      "kind": "native",
+      "description": "Click the \"Search\" button",
+      "instruction": "Click the \"Search\" button",
+      "screenshot_url": "/screenshots/click_1787442609.566.png?name=batch_a_selftest",
+      "inputs": [],
+      "outputs": [],
+      "deleted": false,
+      "action": {
+        "action": "click",
+        "why": "Click the \"Search\" button"
+      },
+      "target_name": "Search",
+      "target_type": "Button",
+      "window_title": null,
+      "goal": null
+    },
+    {
+      "index": 1,
+      "kind": "native",
+      "description": "Type \"note\"",
+      "instruction": "Type \"note\"",
+      "screenshot_url": null,
+      "inputs": [],
+      "outputs": [],
+      "deleted": false,
+      "action": {
+        "action": "type",
+        "text": "note",
+        "type_mode": "replace",
+        "why": "type recorded text"
+      },
+      "target_name": null,
+      "target_type": null,
+      "window_title": null,
+      "goal": null
+    },
+    {
+      "index": 2,
+      "kind": "native",
+      "description": "Click \"CoreInput\" (Pane)",
+      "instruction": "Click \"CoreInput\" (Pane)",
+      "screenshot_url": "/screenshots/click_1787442614.301.png?name=batch_a_selftest",
+      "inputs": [],
+      "outputs": [],
+      "deleted": false,
+      "action": {
+        "action": "click",
+        "why": "Click \"CoreInput\" (Pane)"
+      },
+      "target_name": "CoreInput",
+      "target_type": "Pane",
+      "window_title": null,
+      "goal": null
+    },
+    {
+      "index": 3,
+      "kind": "native",
+      "description": "Click \"Text editor\" (Document)",
+      "instruction": "Click \"Text editor\" (Document)",
+      "screenshot_url": "/screenshots/click_1787442616.939.png?name=batch_a_selftest",
+      "inputs": [],
+      "outputs": [],
+      "deleted": false,
+      "action": {
+        "action": "click",
+        "why": "Click \"Text editor\" (Document)"
+      },
+      "target_name": "Text editor",
+      "target_type": "Document",
+      "window_title": null,
+      "goal": null
+    },
+    {
+      "index": 4,
+      "kind": "native",
+      "description": "Type \"hey i am yash\"",
+      "instruction": "Type \"hey i am yash\"",
+      "screenshot_url": null,
+      "inputs": [],
+      "outputs": [],
+      "deleted": false,
+      "action": {
+        "action": "type",
+        "text": "hey i am yash",
+        "type_mode": "replace",
+        "why": "type recorded text"
+      },
+      "target_name": null,
+      "target_type": null,
+      "window_title": null,
+      "goal": null
+    }
+  ]
+}

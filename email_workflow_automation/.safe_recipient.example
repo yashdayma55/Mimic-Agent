@@ -1,0 +1,2 @@
+# Copy to .safe_recipient (gitignored) or set EWA_SAFE_TEST_RECIPIENT.
+your.email@example.com

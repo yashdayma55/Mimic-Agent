@@ -15,23 +15,38 @@ import atexit
 _pw = None          # the playwright context manager
 _browser = None     # the connected browser
 _atexit_registered = False
+_last_error = ""    # last connect_over_cdp exception, if any
 
 
-def connect_browser(cdp_url="http://localhost:9222"):
-    """Attach to the running debug Chrome. Call once at start of a browser run."""
-    global _pw, _browser, _atexit_registered
+def last_browser_error():
+    return _last_error
+
+
+def connect_browser(cdp_url="http://127.0.0.1:9222", timeout_ms=20000):
+    """Attach to the running debug Chrome. Call once at start of a browser run.
+
+    timeout_ms is passed to Playwright connect_over_cdp (milliseconds).
+    Must run on the same thread that later uses the browser (Playwright sync
+    API is not thread-safe — do not wrap this in a timeout thread).
+    """
+    global _pw, _browser, _atexit_registered, _last_error
     if _browser is not None:
+        _last_error = ""
         return True
     try:
         _pw = sync_playwright().start()
-        _browser = _pw.chromium.connect_over_cdp(cdp_url)
+        _browser = _pw.chromium.connect_over_cdp(
+            cdp_url, timeout=float(timeout_ms)
+        )
+        _last_error = ""
         print("   [browser] connected to Chrome")
         if not _atexit_registered:
             atexit.register(disconnect_browser)
             _atexit_registered = True
         return True
     except Exception as e:
-        print(f"   [browser] could NOT connect ({e}) - is debug Chrome running?")
+        _last_error = f"{type(e).__name__}: {e}"
+        print(f"   [browser] could NOT connect ({_last_error}) - is debug Chrome running?")
         # clean up a half-started playwright driver so exit doesn't EPIPE
         disconnect_browser()
         return False

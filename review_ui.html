@@ -3,538 +3,559 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>MimicAgent — Visual Workflow Review</title>
+  <title>MimicAgent</title>
   <style>
     :root {
-      --bg: #f4f5f7;
+      --bg: #f3f4f6;
       --surface: #ffffff;
-      --ink: #1a1d23;
-      --muted: #5c6570;
-      --line: #e2e5ea;
+      --ink: #14171c;
+      --muted: #5b6470;
+      --line: #e3e6eb;
       --accent: #1f6feb;
       --accent-soft: #e8f0fe;
       --danger: #b42318;
       --danger-soft: #fef3f2;
+      --ok: #067647;
+      --ok-soft: #ecfdf3;
+      --wait: #b45309;
+      --wait-soft: #fffbeb;
       --browser: #0e7490;
       --native: #7c3aed;
       --reason: #b45309;
-      --shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 4px 12px rgba(16, 24, 40, 0.04);
+      --shadow: 0 1px 2px rgba(16, 24, 40, 0.05), 0 8px 24px rgba(16, 24, 40, 0.06);
       --radius: 12px;
       --font: "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
     }
-
     * { box-sizing: border-box; }
     html, body {
-      margin: 0;
-      padding: 0;
-      background: var(--bg);
-      color: var(--ink);
-      font-family: var(--font);
-      font-size: 15px;
-      line-height: 1.45;
+      margin: 0; padding: 0;
+      background: var(--bg); color: var(--ink);
+      font-family: var(--font); font-size: 15px; line-height: 1.45;
     }
-
-    .topbar {
-      position: sticky;
-      top: 0;
-      z-index: 20;
-      background: rgba(255, 255, 255, 0.92);
-      backdrop-filter: blur(8px);
+    header.top {
+      position: sticky; top: 0; z-index: 30;
+      background: rgba(255,255,255,0.94);
+      backdrop-filter: blur(10px);
       border-bottom: 1px solid var(--line);
-      padding: 0.85rem 1.5rem;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 1rem;
-      flex-wrap: wrap;
+      padding: 0.75rem 1.25rem;
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 1rem; flex-wrap: wrap;
     }
-    .brand {
-      display: flex;
-      flex-direction: column;
-      gap: 0.15rem;
+    .brand h1 { margin: 0; font-size: 1.1rem; font-weight: 650; letter-spacing: -0.02em; }
+    .brand .sub { color: var(--muted); font-size: 0.82rem; }
+    .header-actions { display: flex; align-items: center; gap: 0.45rem; flex-wrap: wrap; }
+    .approve-toggle {
+      display: flex; align-items: center; gap: 0.4rem;
+      font-size: 0.85rem; font-weight: 600; color: var(--muted);
+      user-select: none; white-space: nowrap;
     }
-    .brand h1 {
-      margin: 0;
-      font-size: 1.15rem;
-      font-weight: 650;
-      letter-spacing: -0.02em;
+    .approve-toggle input { width: 0.95rem; height: 0.95rem; }
+    select, button, input[type="text"] {
+      font: inherit; border-radius: 8px; border: 1px solid var(--line);
     }
-    .brand .sub {
-      color: var(--muted);
-      font-size: 0.85rem;
-    }
-    .actions {
-      display: flex;
-      gap: 0.5rem;
-      flex-wrap: wrap;
+    select, input[type="text"] {
+      background: #fff; color: var(--ink); padding: 0.45rem 0.65rem;
     }
     button {
-      font: inherit;
-      cursor: pointer;
-      border-radius: 8px;
-      border: 1px solid var(--line);
-      background: var(--surface);
-      color: var(--ink);
-      padding: 0.55rem 0.95rem;
-      font-weight: 560;
-      transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+      cursor: pointer; background: var(--surface); color: var(--ink);
+      padding: 0.5rem 0.9rem; font-weight: 600;
     }
     button:hover { background: #f8f9fb; }
-    button:disabled {
-      opacity: 0.55;
-      cursor: not-allowed;
-    }
-    button.primary {
-      background: var(--accent);
-      border-color: var(--accent);
-      color: #fff;
-    }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
     button.primary:hover { background: #1a5fd0; }
+    button.danger { color: var(--danger); border-color: transparent; background: transparent; }
+    button.danger:hover { background: var(--danger-soft); }
     button.ghost { background: transparent; }
-
-    main {
-      max-width: 880px;
-      margin: 0 auto;
-      padding: 1.25rem 1.25rem 4rem;
-    }
-
-    #status {
-      margin: 0 0 1rem;
-      padding: 0.75rem 1rem;
-      border-radius: 8px;
-      background: var(--accent-soft);
-      color: #1849a9;
-      font-size: 0.9rem;
-      display: none;
-    }
-    #status.show { display: block; }
-    #status.error {
-      background: var(--danger-soft);
-      color: var(--danger);
-    }
-    #status.ok {
-      background: #ecfdf3;
-      color: #067647;
-    }
-
-    #list {
-      display: flex;
-      flex-direction: column;
-      gap: 1rem;
-    }
-
-    .card {
-      background: var(--surface);
-      border: 1px solid var(--line);
-      border-radius: var(--radius);
-      box-shadow: var(--shadow);
-      padding: 1rem 1.1rem 1.15rem;
+    .layout {
       display: grid;
-      grid-template-columns: 168px 1fr;
-      gap: 1rem;
-      transition: opacity 0.15s ease, border-color 0.15s ease;
+      grid-template-columns: minmax(0, 1fr) 340px;
+      gap: 1.1rem;
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 1.1rem 1.25rem 3rem;
+      align-items: start;
     }
-    .card.deleted {
-      opacity: 0.45;
-      border-style: dashed;
+    #banner {
+      display: none; margin: 0 0 0.9rem; padding: 0.65rem 0.9rem;
+      border-radius: 8px; font-size: 0.9rem;
     }
-    .card-media {
-      display: flex;
-      flex-direction: column;
-      gap: 0.5rem;
+    #banner.show { display: block; background: var(--accent-soft); color: #1849a9; }
+    #banner.error { background: var(--danger-soft); color: var(--danger); }
+    #banner.ok { background: var(--ok-soft); color: var(--ok); }
+    #steps { display: flex; flex-direction: column; gap: 0.85rem; }
+    .card {
+      background: var(--surface); border: 1px solid var(--line);
+      border-radius: var(--radius); box-shadow: var(--shadow);
+      padding: 0.95rem 1rem; display: grid; grid-template-columns: 160px 1fr; gap: 0.9rem;
     }
-    .thumb-wrap {
-      width: 168px;
-      height: 110px;
-      border-radius: 8px;
-      border: 1px solid var(--line);
-      background: #eef0f3;
-      overflow: hidden;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      cursor: zoom-in;
-      position: relative;
+    .card.deleted { opacity: 0.48; border-style: dashed; }
+    .thumb {
+      width: 160px; height: 104px; border-radius: 8px; border: 1px solid var(--line);
+      background: #eef1f4; overflow: hidden; display: flex; align-items: center;
+      justify-content: center; color: var(--muted); font-size: 0.78rem; text-align: center;
     }
-    .thumb-wrap.empty {
-      cursor: default;
-      color: var(--muted);
-      font-size: 0.78rem;
-      text-align: center;
-      padding: 0.5rem;
+    .thumb.has-img { cursor: zoom-in; }
+    .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .body { display: flex; flex-direction: column; gap: 0.5rem; min-width: 0; }
+    .row { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+    .num { font-weight: 700; font-variant-numeric: tabular-nums; }
+    .kind {
+      font-size: 0.72rem; font-weight: 650; text-transform: uppercase;
+      letter-spacing: 0.04em; padding: 0.15rem 0.45rem; border-radius: 999px;
     }
-    .thumb-wrap img {
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-      display: block;
-    }
-    .card-body {
-      display: flex;
-      flex-direction: column;
-      gap: 0.65rem;
-      min-width: 0;
-    }
-    .card-head {
-      display: flex;
-      align-items: center;
-      gap: 0.55rem;
-      flex-wrap: wrap;
-    }
-    .step-num {
-      font-weight: 700;
-      font-variant-numeric: tabular-nums;
-      color: var(--ink);
-    }
-    .badge {
-      font-size: 0.72rem;
-      font-weight: 650;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-      padding: 0.18rem 0.5rem;
-      border-radius: 999px;
-      border: 1px solid transparent;
-    }
-    .badge.browser {
-      color: var(--browser);
-      background: #ecfeff;
-      border-color: #a5f3fc;
-    }
-    .badge.native {
-      color: var(--native);
-      background: #f5f3ff;
-      border-color: #ddd6fe;
-    }
-    .badge.reason {
-      color: var(--reason);
-      background: #fffbeb;
-      border-color: #fde68a;
-    }
-    label.field {
-      display: flex;
-      flex-direction: column;
-      gap: 0.3rem;
-      font-size: 0.78rem;
-      font-weight: 600;
-      color: var(--muted);
-    }
+    .kind.native { color: var(--native); background: #f5f3ff; }
+    .kind.browser { color: var(--browser); background: #ecfeff; }
+    .kind.reason { color: var(--reason); background: #fffbeb; }
+    label.field { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.75rem; font-weight: 650; color: var(--muted); }
     textarea {
-      font: inherit;
-      color: var(--ink);
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 0.55rem 0.65rem;
-      resize: vertical;
-      min-height: 2.6rem;
-      background: #fafbfc;
+      font: inherit; color: var(--ink); border: 1px solid var(--line); border-radius: 8px;
+      padding: 0.5rem 0.6rem; resize: vertical; min-height: 2.5rem; background: #fafbfc;
     }
-    textarea:focus {
-      outline: 2px solid var(--accent-soft);
-      border-color: var(--accent);
-      background: #fff;
+    textarea:focus, select:focus, input:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+    .foot { display: flex; justify-content: space-between; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+    .add-row { display: flex; justify-content: center; }
+    .add-row button { font-size: 0.82rem; color: var(--muted); }
+    aside.run {
+      position: sticky; top: 4.4rem;
+      background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+      box-shadow: var(--shadow); padding: 1rem; min-height: 240px;
     }
-    textarea.desc { min-height: 3.4rem; }
-    textarea.note { min-height: 2.4rem; }
-    .card-foot {
-      display: flex;
-      justify-content: flex-end;
+    aside.run h2 { margin: 0 0 0.65rem; font-size: 0.92rem; }
+    .progress { font-weight: 650; margin-bottom: 0.5rem; }
+    .log {
+      font-family: ui-monospace, Consolas, monospace; font-size: 0.78rem;
+      background: #0f172a; color: #e2e8f0; border-radius: 8px; padding: 0.65rem;
+      max-height: 220px; overflow: auto; white-space: pre-wrap; min-height: 6rem;
     }
-    .card-foot button.delete-btn {
-      border-color: transparent;
-      color: var(--danger);
-      background: transparent;
-      font-size: 0.85rem;
-      padding: 0.35rem 0.55rem;
+    .wait-box {
+      display: none; margin-top: 0.75rem; padding: 0.7rem; border-radius: 8px;
+      background: var(--wait-soft); border: 1px solid #fde68a;
     }
-    .card-foot button.delete-btn:hover {
-      background: var(--danger-soft);
-    }
-    .card.deleted .delete-btn {
-      color: var(--accent);
-    }
-
-    /* Lightbox */
+    .wait-box.show { display: block; }
+    .wait-box .kind-label { font-weight: 700; text-transform: uppercase; font-size: 0.72rem; color: var(--wait); }
+    .wait-box p { margin: 0.4rem 0 0.55rem; }
+    .wait-box .answer-row { display: flex; gap: 0.4rem; }
+    .wait-box input { flex: 1; }
     #lightbox {
-      display: none;
-      position: fixed;
-      inset: 0;
-      z-index: 50;
-      background: rgba(15, 23, 42, 0.72);
-      align-items: center;
-      justify-content: center;
-      padding: 1.5rem;
-      cursor: zoom-out;
+      display: none; position: fixed; inset: 0; z-index: 80;
+      background: rgba(15, 23, 42, 0.72); align-items: center; justify-content: center;
+      padding: 1.5rem; cursor: zoom-out;
     }
     #lightbox.show { display: flex; }
-    #lightbox img {
-      max-width: min(960px, 94vw);
-      max-height: 88vh;
-      border-radius: 10px;
-      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.35);
-      background: #111;
-    }
-
-    @media (max-width: 640px) {
-      .card {
-        grid-template-columns: 1fr;
-      }
-      .thumb-wrap { width: 100%; height: 160px; }
+    #lightbox img { max-width: 94vw; max-height: 88vh; border-radius: 10px; }
+    @media (max-width: 900px) {
+      .layout { grid-template-columns: 1fr; }
+      aside.run { position: static; }
+      .card { grid-template-columns: 1fr; }
+      .thumb { width: 100%; height: 160px; }
     }
   </style>
 </head>
 <body>
-  <header class="topbar">
+  <header class="top">
     <div class="brand">
-      <h1>MimicAgent Workflow Review</h1>
-      <div class="sub" id="meta">Loading steps…</div>
+      <h1>MimicAgent</h1>
+      <div class="sub">Record · instruct · compile · run</div>
     </div>
-    <div class="actions">
-      <button type="button" class="ghost" id="btn-record" title="Recording stays in the terminal for v1">Record New</button>
+    <div class="header-actions">
+      <select id="wf-picker" aria-label="Workflow"></select>
+      <button type="button" id="btn-new">New</button>
+      <button type="button" id="btn-record">Record</button>
       <button type="button" id="btn-save">Save</button>
+      <label class="approve-toggle" for="chk-approve">
+        <input type="checkbox" id="chk-approve" />
+        Approve every step
+      </label>
       <button type="button" class="primary" id="btn-run">Run</button>
     </div>
   </header>
 
-  <main>
-    <div id="status" role="status"></div>
-    <div id="list"></div>
-  </main>
-
-  <div id="lightbox" aria-hidden="true"><img alt="Step screenshot enlarged" /></div>
+  <div class="layout">
+    <section>
+      <div id="banner" role="status"></div>
+      <div id="steps"></div>
+    </section>
+    <aside class="run" id="run-panel">
+      <h2>Run</h2>
+      <div class="progress" id="run-progress">No run</div>
+      <div class="log" id="run-log">(idle)</div>
+      <div class="wait-box" id="wait-box">
+        <div class="kind-label" id="wait-kind">approval</div>
+        <p id="wait-text"></p>
+        <div class="answer-row">
+          <input type="text" id="wait-input" placeholder="y / skip / your answer" />
+          <button type="button" class="primary" id="btn-answer">Send</button>
+        </div>
+      </div>
+    </aside>
+  </div>
+  <div id="lightbox" aria-hidden="true"><img alt="Enlarged screenshot" /></div>
 
   <script>
     (function () {
       "use strict";
-
+      var name = "";
       var steps = [];
-      var listEl = document.getElementById("list");
-      var metaEl = document.getElementById("meta");
-      var statusEl = document.getElementById("status");
-      var lightbox = document.getElementById("lightbox");
-      var lightboxImg = lightbox.querySelector("img");
+      var runId = null;
+      var pollTimer = null;
+      var recording = false;
 
-      function setStatus(msg, kind) {
-        if (!msg) {
-          statusEl.className = "";
-          statusEl.textContent = "";
-          return;
-        }
-        statusEl.textContent = msg;
-        statusEl.className = "show" + (kind ? " " + kind : "");
+      var picker = document.getElementById("wf-picker");
+      var stepsEl = document.getElementById("steps");
+      var banner = document.getElementById("banner");
+      var lb = document.getElementById("lightbox");
+      var lbImg = lb.querySelector("img");
+
+      function flash(msg, kind) {
+        banner.textContent = msg || "";
+        banner.className = msg ? ("show" + (kind ? " " + kind : "")) : "";
       }
 
-      function collectFromDom() {
-        var cards = listEl.querySelectorAll(".card");
-        var out = [];
-        cards.forEach(function (card) {
-          var idx = parseInt(card.getAttribute("data-index"), 10);
-          var kind = card.getAttribute("data-kind") || "reason";
-          var desc = card.querySelector(".desc").value;
-          var note = card.querySelector(".note").value;
-          var deleted = card.classList.contains("deleted");
-          out.push({
-            index: idx,
-            kind: kind,
-            description: desc,
-            editable_note: note,
-            deleted: deleted,
-            screenshot_url: card.getAttribute("data-shot") || null
+      function json(method, path, body) {
+        var opts = { method: method, headers: {} };
+        if (body !== undefined) {
+          opts.headers["Content-Type"] = "application/json";
+          opts.body = JSON.stringify(body);
+        }
+        return fetch(path, opts).then(function (r) {
+          return r.json().then(function (d) {
+            d._http = r.status;
+            return d;
           });
         });
-        return out;
       }
 
-      function openLightbox(src) {
-        if (!src) return;
-        lightboxImg.src = src;
-        lightbox.classList.add("show");
-        lightbox.setAttribute("aria-hidden", "false");
-      }
-
-      function closeLightbox() {
-        lightbox.classList.remove("show");
-        lightbox.setAttribute("aria-hidden", "true");
-        lightboxImg.removeAttribute("src");
-      }
-
-      lightbox.addEventListener("click", closeLightbox);
-      document.addEventListener("keydown", function (e) {
-        if (e.key === "Escape") closeLightbox();
-      });
-
-      function render() {
-        listEl.innerHTML = "";
-        if (!steps.length) {
-          metaEl.textContent = "No steps loaded";
-          listEl.innerHTML = "<p style='color:var(--muted)'>No workflow steps found. Transcribe a recording first, then refresh.</p>";
-          return;
-        }
-        var withShot = steps.filter(function (s) { return s.screenshot_url; }).length;
-        metaEl.textContent = steps.length + " steps · " + withShot + " with screenshots";
-
-        steps.forEach(function (s) {
-          var card = document.createElement("article");
-          card.className = "card" + (s.deleted ? " deleted" : "");
-          card.setAttribute("data-index", String(s.index));
-          card.setAttribute("data-kind", s.kind || "reason");
-          if (s.screenshot_url) card.setAttribute("data-shot", s.screenshot_url);
-
-          var media = document.createElement("div");
-          media.className = "card-media";
-          var thumb = document.createElement("div");
-          if (s.screenshot_url) {
-            thumb.className = "thumb-wrap";
-            var img = document.createElement("img");
-            img.src = s.screenshot_url;
-            img.alt = "Step " + s.index + " screenshot";
-            img.loading = "lazy";
-            thumb.appendChild(img);
-            thumb.addEventListener("click", function () {
-              openLightbox(s.screenshot_url);
-            });
-          } else {
-            thumb.className = "thumb-wrap empty";
-            thumb.textContent = "No screenshot";
-          }
-          media.appendChild(thumb);
-
-          var body = document.createElement("div");
-          body.className = "card-body";
-
-          var head = document.createElement("div");
-          head.className = "card-head";
-          var num = document.createElement("span");
-          num.className = "step-num";
-          num.textContent = "Step " + s.index;
-          var badge = document.createElement("span");
-          var kind = (s.kind || "reason").toLowerCase();
-          badge.className = "badge " + kind;
-          badge.textContent = kind;
-          head.appendChild(num);
-          head.appendChild(badge);
-
-          var descLab = document.createElement("label");
-          descLab.className = "field";
-          descLab.textContent = "Description";
-          var desc = document.createElement("textarea");
-          desc.className = "desc";
-          desc.rows = 2;
-          desc.value = s.description || "";
-          descLab.appendChild(desc);
-
-          var noteLab = document.createElement("label");
-          noteLab.className = "field";
-          noteLab.textContent = "Extra notes / improve this step";
-          var note = document.createElement("textarea");
-          note.className = "note";
-          note.rows = 2;
-          note.placeholder = "Optional guidance the agent should follow…";
-          note.value = s.editable_note || "";
-          noteLab.appendChild(note);
-
-          var foot = document.createElement("div");
-          foot.className = "card-foot";
-          var delBtn = document.createElement("button");
-          delBtn.type = "button";
-          delBtn.className = "delete-btn";
-          delBtn.textContent = s.deleted ? "Undo delete" : "Delete step";
-          delBtn.addEventListener("click", function () {
-            card.classList.toggle("deleted");
-            var nowDeleted = card.classList.contains("deleted");
-            delBtn.textContent = nowDeleted ? "Undo delete" : "Delete step";
+      function loadWorkflows(selectName) {
+        return json("GET", "/api/workflows").then(function (d) {
+          var list = (d.workflows || []).map(function (w) { return w.name; });
+          picker.innerHTML = "";
+          var blank = document.createElement("option");
+          blank.value = "";
+          blank.textContent = list.length ? "Select workflow…" : "No workflows yet";
+          picker.appendChild(blank);
+          list.forEach(function (n) {
+            var o = document.createElement("option");
+            o.value = n;
+            o.textContent = n;
+            picker.appendChild(o);
           });
-          foot.appendChild(delBtn);
-
-          body.appendChild(head);
-          body.appendChild(descLab);
-          body.appendChild(noteLab);
-          body.appendChild(foot);
-
-          card.appendChild(media);
-          card.appendChild(body);
-          listEl.appendChild(card);
+          if (selectName) picker.value = selectName;
+          return list;
         });
       }
 
       function loadSteps() {
-        setStatus("Loading steps…");
-        return fetch("/api/steps")
-          .then(function (r) { return r.json(); })
-          .then(function (data) {
-            if (!data.ok) throw new Error(data.error || "failed to load steps");
-            steps = data.steps || [];
-            render();
-            setStatus("");
-          })
-          .catch(function (err) {
-            setStatus("Could not load steps: " + err.message, "error");
-            metaEl.textContent = "Load failed";
-          });
+        if (!name) {
+          steps = [];
+          renderSteps();
+          return Promise.resolve();
+        }
+        return json("GET", "/api/steps?name=" + encodeURIComponent(name)).then(function (d) {
+          steps = d.steps || [];
+          renderSteps();
+        });
       }
 
-      function saveSteps() {
-        var payload = { steps: collectFromDom() };
-        setStatus("Saving…");
-        document.getElementById("btn-save").disabled = true;
-        return fetch("/api/save", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload)
-        })
-          .then(function (r) { return r.json(); })
-          .then(function (data) {
-            if (!data.ok) throw new Error(data.error || "save failed");
-            setStatus("Saved " + (data.steps != null ? data.steps : "") + " steps to transcript.json", "ok");
-            return data;
-          })
-          .catch(function (err) {
-            setStatus("Save failed: " + err.message, "error");
-            throw err;
-          })
-          .finally(function () {
-            document.getElementById("btn-save").disabled = false;
-          });
+      function shotUrl(s) {
+        if (!s) return null;
+        if (s.screenshot_url) {
+          var u = s.screenshot_url;
+          if (name && u.indexOf("name=") < 0) {
+            u += (u.indexOf("?") >= 0 ? "&" : "?") + "name=" + encodeURIComponent(name);
+          }
+          return u;
+        }
+        return null;
       }
 
-      function runWorkflow() {
-        document.getElementById("btn-run").disabled = true;
-        setStatus("Saving before run…");
-        saveSteps()
-          .then(function () {
-            setStatus("Starting run…");
-            return fetch("/api/run", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ require_approval: true })
-            }).then(function (r) { return r.json(); });
+      function renderSteps() {
+        stepsEl.innerHTML = "";
+        if (!name) {
+          stepsEl.innerHTML = "<p style='color:var(--muted)'>Choose or create a workflow.</p>";
+          return;
+        }
+        if (!steps.length) {
+          stepsEl.innerHTML = "<p style='color:var(--muted)'>No steps yet. Record a demo or add a reason step.</p>";
+          addInsertButton(-1);
+          return;
+        }
+        steps.forEach(function (s, i) {
+          addInsertButton(i - 1);
+          stepsEl.appendChild(renderCard(s, i));
+        });
+        addInsertButton(steps.length - 1);
+      }
+
+      function addInsertButton(afterIndex) {
+        var row = document.createElement("div");
+        row.className = "add-row";
+        var b = document.createElement("button");
+        b.type = "button";
+        b.textContent = "+ Add step here";
+        b.addEventListener("click", function () { insertReason(afterIndex); });
+        row.appendChild(b);
+        stepsEl.appendChild(row);
+      }
+
+      function renderCard(s, i) {
+        var card = document.createElement("article");
+        card.className = "card" + (s.deleted ? " deleted" : "");
+        card.dataset.index = String(i);
+
+        var thumb = document.createElement("div");
+        var url = shotUrl(s);
+        if (url) {
+          thumb.className = "thumb has-img";
+          var img = document.createElement("img");
+          img.src = url;
+          img.alt = "Step " + (i + 1);
+          thumb.appendChild(img);
+          thumb.addEventListener("click", function () { openLb(url); });
+        } else {
+          thumb.className = "thumb";
+          thumb.textContent = "No screenshot";
+        }
+
+        var body = document.createElement("div");
+        body.className = "body";
+        var row = document.createElement("div");
+        row.className = "row";
+        var num = document.createElement("span");
+        num.className = "num";
+        num.textContent = "Step " + (i + 1);
+        var kindSel = document.createElement("select");
+        ["native", "browser", "reason"].forEach(function (k) {
+          var o = document.createElement("option");
+          o.value = k;
+          o.textContent = k;
+          if ((s.kind || "reason") === k) o.selected = true;
+          kindSel.appendChild(o);
+        });
+        kindSel.className = "kind " + (s.kind || "reason");
+        kindSel.addEventListener("change", function () {
+          kindSel.className = "kind " + kindSel.value;
+          patch(i, { kind: kindSel.value });
+        });
+        row.appendChild(num);
+        row.appendChild(kindSel);
+
+        var dLab = document.createElement("label");
+        dLab.className = "field";
+        dLab.textContent = "Description";
+        var dTa = document.createElement("textarea");
+        dTa.value = s.description || "";
+        dTa.addEventListener("blur", function () { patch(i, { description: dTa.value }); });
+        dLab.appendChild(dTa);
+
+        var iLab = document.createElement("label");
+        iLab.className = "field";
+        iLab.textContent = "Instruction — how should the agent do this step";
+        var iTa = document.createElement("textarea");
+        iTa.value = s.instruction || "";
+        iTa.placeholder = "Plain language for the agent…";
+        iTa.addEventListener("blur", function () { patch(i, { instruction: iTa.value }); });
+        iLab.appendChild(iTa);
+
+        var foot = document.createElement("div");
+        foot.className = "foot";
+        var del = document.createElement("button");
+        del.type = "button";
+        del.className = "danger";
+        del.textContent = s.deleted ? "Undo delete" : "Delete";
+        del.addEventListener("click", function () {
+          patch(i, { deleted: !s.deleted }).then(loadSteps);
+        });
+        foot.appendChild(del);
+
+        body.appendChild(row);
+        body.appendChild(dLab);
+        body.appendChild(iLab);
+        body.appendChild(foot);
+        card.appendChild(thumb);
+        card.appendChild(body);
+        return card;
+      }
+
+      function patch(index, p) {
+        if (!name) return Promise.resolve();
+        return json("POST", "/api/step/update", { name: name, index: index, patch: p })
+          .then(function (d) {
+            if (d.ok === false) throw new Error(d.error || "update failed");
+            if (d.steps) steps = d.steps;
+            return d;
           })
-          .then(function (data) {
-            if (!data.ok) throw new Error(data.error || "run failed");
-            setStatus(
-              "Running — watch the terminal for approvals (y / s / correction).",
-              "ok"
-            );
-          })
-          .catch(function (err) {
-            setStatus("Run failed: " + err.message, "error");
-          })
-          .finally(function () {
-            document.getElementById("btn-run").disabled = false;
+          .catch(function (e) { flash(e.message, "error"); });
+      }
+
+      function insertReason(afterIndex) {
+        if (!name) { flash("Pick or create a workflow first", "error"); return; }
+        json("POST", "/api/step/insert", {
+          name: name,
+          after_index: afterIndex,
+          description: "New reason step",
+          kind: "reason"
+        }).then(function (d) {
+          if (d.ok === false) throw new Error(d.error);
+          steps = d.steps || steps;
+          renderSteps();
+        }).catch(function (e) { flash(e.message, "error"); });
+      }
+
+      function collectSteps() {
+        var cards = stepsEl.querySelectorAll(".card");
+        var out = [];
+        cards.forEach(function (card, i) {
+          var base = steps[i] ? Object.assign({}, steps[i]) : {};
+          var kindSel = card.querySelector("select");
+          var areas = card.querySelectorAll("textarea");
+          base.kind = kindSel ? kindSel.value : base.kind;
+          if (areas[0]) base.description = areas[0].value;
+          if (areas[1]) base.instruction = areas[1].value;
+          base.deleted = card.classList.contains("deleted");
+          base.index = i;
+          out.push(base);
+        });
+        return out.length ? out : steps;
+      }
+
+      function openLb(src) {
+        lbImg.src = src;
+        lb.classList.add("show");
+      }
+      lb.addEventListener("click", function () { lb.classList.remove("show"); });
+      document.addEventListener("keydown", function (e) {
+        if (e.key === "Escape") lb.classList.remove("show");
+      });
+
+      picker.addEventListener("change", function () {
+        name = picker.value;
+        loadSteps();
+      });
+
+      document.getElementById("btn-new").addEventListener("click", function () {
+        var n = window.prompt("New workflow name:");
+        if (!n || !n.trim()) return;
+        json("POST", "/api/workflow/save", { name: n.trim(), steps: [] }).then(function (d) {
+          if (d.ok === false) throw new Error(d.error || "create failed");
+          name = d.name || n.trim();
+          return loadWorkflows(name);
+        }).then(loadSteps).catch(function (e) { flash(e.message, "error"); });
+      });
+
+      document.getElementById("btn-record").addEventListener("click", function () {
+        if (recording) {
+          json("POST", "/api/record/finish", { name: name }).then(function (d) {
+            recording = false;
+            document.getElementById("btn-record").textContent = "Record";
+            flash("Recording finished", "ok");
+            if (d.steps) { steps = d.steps; renderSteps(); }
+            else loadSteps();
           });
+          return;
+        }
+        if (!name) {
+          var n = window.prompt("Name this recording:");
+          if (!n || !n.trim()) return;
+          name = n.trim();
+        }
+        json("POST", "/api/record/start", { name: name }).then(function (d) {
+          if (d.ok === false) throw new Error(d.error);
+          name = d.name || name;
+          recording = true;
+          document.getElementById("btn-record").textContent = "Finish recording";
+          flash("Recording… press Esc in the recorder, then Finish recording.", "ok");
+          loadWorkflows(name);
+          pollRecord();
+        }).catch(function (e) { flash(e.message, "error"); });
+      });
+
+      function pollRecord() {
+        if (!recording || !name) return;
+        json("GET", "/api/record/status?name=" + encodeURIComponent(name)).then(function (d) {
+          if (!recording) return;
+          flash("Recording… events " + (d.events_so_far || 0) + " (Esc to stop, then Finish)", "");
+          if (d.running === false) {
+            recording = false;
+            document.getElementById("btn-record").textContent = "Record";
+          } else {
+            setTimeout(pollRecord, 1000);
+          }
+        });
       }
 
       document.getElementById("btn-save").addEventListener("click", function () {
-        saveSteps().catch(function () {});
-      });
-      document.getElementById("btn-run").addEventListener("click", runWorkflow);
-      document.getElementById("btn-record").addEventListener("click", function () {
-        setStatus(
-          "Record New: use the MimicAgent terminal (option 8 or the recorder) for now. Refresh this page after you transcribe.",
-          ""
-        );
+        if (!name) { flash("No workflow selected", "error"); return; }
+        json("POST", "/api/workflow/save", { name: name, steps: collectSteps() }).then(function (d) {
+          if (d.ok === false) {
+            var msg = d.error || "save failed";
+            if (d.violations && d.violations[0]) msg = d.violations[0].message || msg;
+            throw new Error(msg);
+          }
+          flash("Saved " + (d.steps || 0) + " steps", "ok");
+        }).catch(function (e) { flash(e.message, "error"); });
       });
 
-      loadSteps();
+      document.getElementById("btn-run").addEventListener("click", function () {
+        if (!name) { flash("No workflow selected", "error"); return; }
+        json("POST", "/api/workflow/save", { name: name, steps: collectSteps() }).then(function (d) {
+          if (d.ok === false) throw new Error(d.error || "save failed");
+          var body = {
+            name: name,
+            inputs: {},
+            require_approval: document.getElementById("chk-approve").checked
+          };
+          return json("POST", "/api/run", body);
+        }).then(function (d) {
+          if (d.ok === false) throw new Error(d.error || "run failed");
+          runId = d.run_id;
+          flash("Run started", "ok");
+          pollRun();
+        }).catch(function (e) { flash(e.message, "error"); });
+      });
+
+      function pollRun() {
+        if (!runId) return;
+        if (pollTimer) clearTimeout(pollTimer);
+        json("GET", "/api/run/status?run_id=" + encodeURIComponent(runId)).then(function (d) {
+          var prog = document.getElementById("run-progress");
+          var log = document.getElementById("run-log");
+          var wait = document.getElementById("wait-box");
+          var total = d.total || 0;
+          var idx = (d.step_index || 0) + (d.running ? 1 : 0);
+          prog.textContent = d.running
+            ? ("Step " + Math.min((d.step_index || 0) + 1, total) + " / " + total)
+            : (d.error ? ("Stopped: " + d.error) : "Finished");
+          log.textContent = (d.log_tail || []).join("\n") || "(no log)";
+          if (d.awaiting && d.awaiting !== "none") {
+            wait.classList.add("show");
+            document.getElementById("wait-kind").textContent = d.awaiting;
+            document.getElementById("wait-text").textContent = d.prompt_text || "";
+          } else {
+            wait.classList.remove("show");
+          }
+          if (d.running) pollTimer = setTimeout(pollRun, 700);
+        });
+      }
+
+      document.getElementById("btn-answer").addEventListener("click", sendAnswer);
+      document.getElementById("wait-input").addEventListener("keydown", function (e) {
+        if (e.key === "Enter") sendAnswer();
+      });
+      function sendAnswer() {
+        var inp = document.getElementById("wait-input");
+        if (!runId) return;
+        json("POST", "/api/run/answer", { run_id: runId, answer: inp.value }).then(function (d) {
+          if (d.ok === false) throw new Error(d.error);
+          inp.value = "";
+          pollRun();
+        }).catch(function (e) { flash(e.message, "error"); });
+      }
+
+      loadWorkflows().then(function () {
+        var q = new URLSearchParams(location.search).get("workflow");
+        if (q) { name = q; picker.value = name; loadSteps(); }
+      });
     })();
   </script>
 </body>

@@ -144,17 +144,21 @@ def _load_api_key():
         return ""
 
 
-def _lookup_screenshot_in_db(step):
-    """Find captures/click_*.png for this click via recording.db (x,y match)."""
-    db = "recording.db"
-    if not os.path.isfile(db):
+def _lookup_screenshot_in_db(step, db_path=None, workflow_dir=None):
+    """Find click screenshot via THIS workflow's recording.db (x,y match)."""
+    if not db_path:
+        if workflow_dir:
+            db_path = os.path.join(os.path.abspath(workflow_dir), "recording.db")
+        else:
+            db_path = "recording.db"
+    if not os.path.isfile(db_path):
         return None
     x, y = step.get("x"), step.get("y")
     if x is None or y is None:
         return None
     try:
         import sqlite3
-        conn = sqlite3.connect(db)
+        conn = sqlite3.connect(db_path)
         row = conn.execute(
             "SELECT screenshot FROM events "
             "WHERE kind='click' AND x=? AND y=? AND screenshot IS NOT NULL "
@@ -162,7 +166,6 @@ def _lookup_screenshot_in_db(step):
             (int(x), int(y)),
         ).fetchone()
         if not row:
-            # nearest click within a few pixels
             row = conn.execute(
                 "SELECT screenshot FROM events "
                 "WHERE kind='click' AND screenshot IS NOT NULL "
@@ -171,18 +174,35 @@ def _lookup_screenshot_in_db(step):
                 (int(x), int(y), int(x), int(y)),
             ).fetchone()
         conn.close()
-        if row and row[0] and os.path.isfile(row[0]):
-            return row[0]
+        if row and row[0]:
+            if workflow_dir:
+                from workflow_folder import normalize_screenshot_path
+                return normalize_screenshot_path(row[0], workflow_dir)
+            if os.path.isfile(row[0]):
+                return row[0]
     except Exception:
         pass
     return None
 
 
-def _resolve_screenshot(step):
-    """Return a saved per-click PNG path, or None."""
-    path = step.get("screenshot")
-    if path and os.path.isfile(path):
-        return path
+def _resolve_screenshot(step, workflow_dir=None):
+    """Return a saved per-click PNG path scoped to workflow_dir, or None.
+
+    When workflow_dir is set, only resolves under that folder — never falls
+    back to top-level captures/ or a shared recording.db.
+    """
+    stored = step.get("screenshot")
+    if stored:
+        if workflow_dir:
+            from workflow_folder import normalize_screenshot_path
+            path = normalize_screenshot_path(stored, workflow_dir)
+            if path:
+                return path
+            return None
+        if os.path.isfile(stored):
+            return stored
+    if workflow_dir:
+        return _lookup_screenshot_in_db(step, workflow_dir=workflow_dir)
     return _lookup_screenshot_in_db(step)
 
 
@@ -216,12 +236,12 @@ def _crop_saved_around_click(image_path, cx, cy, box=400):
     return buf.getvalue()
 
 
-def _vision_label_unlabeled_click(step):
+def _vision_label_unlabeled_click(step, workflow_dir=None):
     """Ask existing vision API what was clicked; return a short label or None.
 
     Never raises — caller falls back to an unresolved placeholder.
     """
-    path = _resolve_screenshot(step)
+    path = _resolve_screenshot(step, workflow_dir=workflow_dir)
     if not path:
         print("   [vision-label] no screenshot for this step; skip")
         return None
@@ -254,11 +274,11 @@ def _vision_label_unlabeled_click(step):
     return label
 
 
-def _describe_unlabeled_click(step):
+def _describe_unlabeled_click(step, workflow_dir=None):
     """Vision-derived description, or a clear unresolved placeholder."""
     etype = (step.get("elem_type") or "element").strip() or "element"
     try:
-        label = _vision_label_unlabeled_click(step)
+        label = _vision_label_unlabeled_click(step, workflow_dir=workflow_dir)
     except Exception as e:
         print(f"   [vision-label] unexpected error ({e})")
         label = None
@@ -269,7 +289,7 @@ def _describe_unlabeled_click(step):
     return f"[unresolved - please label] click on unlabeled {etype}"
 
 
-def _build_action_and_inputs(step, inputs_found):
+def _build_action_and_inputs(step, inputs_found, workflow_dir=None):
     """Map a recorded step to a closed-vocab action + collect placeholders.
 
     Returns (action_dict|None, placeholder_names_used_in_this_step, description).
@@ -324,7 +344,7 @@ def _build_action_and_inputs(step, inputs_found):
     if act == "click":
         # Tree unlabeled -> vision on the saved click screenshot (Task 1)
         if _is_unlabeled_click(step):
-            desc = _describe_unlabeled_click(step)
+            desc = _describe_unlabeled_click(step, workflow_dir=workflow_dir)
             # Prefer vision text as target_name so harness can locate later
             vision_name = None
             if "identified by vision" in desc:
@@ -370,10 +390,12 @@ def _build_action_and_inputs(step, inputs_found):
     return None, used, desc
 
 
-def recorded_to_harness_step(step, inputs_found):
+def recorded_to_harness_step(step, inputs_found, workflow_dir=None):
     """Convert one recorded step dict into a HarnessStep (first-guess kind)."""
     kind = _infer_kind(step)
-    action, used, desc = _build_action_and_inputs(step, inputs_found)
+    action, used, desc = _build_action_and_inputs(
+        step, inputs_found, workflow_dir=workflow_dir
+    )
     name = (step.get("elem_name") or "").strip() or None
     # Vision-derived name for unlabeled clicks
     if not name and step.get("_vision_name"):
@@ -468,18 +490,30 @@ def load_edited_transcript(txt_path="transcript.txt", json_path="transcript.json
     return harness_steps, inputs_list
 
 
-def transcribe(source, out_txt="transcript.txt", out_json="transcript.json"):
+def transcribe(source, out_txt="transcript.txt", out_json="transcript.json",
+               workflow_dir=None):
     """Convert a recorded workflow into transcript.txt + transcript.json.
 
     Returns (harness_steps, inputs_list).
     """
+    from workflow_folder import infer_workflow_dir
+
+    if workflow_dir is None:
+        workflow_dir = infer_workflow_dir(source)
+    if workflow_dir is None and out_json:
+        workflow_dir = infer_workflow_dir(out_json)
+    if workflow_dir:
+        print(f"[transcribe] workflow folder: {os.path.abspath(workflow_dir)}")
+
     recorded = load_recorded_steps(source)
     inputs_found = set()
     harness_steps = []
     for raw in recorded:
         if not isinstance(raw, dict):
             continue
-        hs = recorded_to_harness_step(raw, inputs_found)
+        hs = recorded_to_harness_step(
+            raw, inputs_found, workflow_dir=workflow_dir
+        )
         # Soft-validate; reason/browser/native must pass
         try:
             hs.validate()
@@ -534,8 +568,72 @@ def transcribe(source, out_txt="transcript.txt", out_json="transcript.json"):
     return harness_steps, inputs_list
 
 
+def _selftest_screenshot_resolution():
+    """Task 2 self-test: screenshots resolve only under workflows/<name>/captures/."""
+    import sqlite3
+    import shutil
+    from PIL import Image
+    from workflow_folder import resolve_paths, create_workflow_folder
+
+    print("=== transcribe Task 2 self-test (per-workflow screenshots) ===")
+    name = "task2_selftest"
+    paths = resolve_paths(name)
+    if os.path.isdir(paths["workflow_dir"]):
+        shutil.rmtree(paths["workflow_dir"])
+    create_workflow_folder(name)
+
+    fname = "click_999.000.png"
+    cap_abs = os.path.join(paths["captures_dir"], fname)
+    Image.new("RGB", (8, 8), (200, 40, 40)).save(cap_abs)
+
+    conn = sqlite3.connect(paths["recording_db"])
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts REAL NOT NULL, kind TEXT NOT NULL,
+        x INTEGER, y INTEGER, button TEXT, key TEXT,
+        elem_name TEXT, elem_type TEXT, screenshot TEXT
+    )""")
+    conn.execute(
+        "INSERT INTO events (ts, kind, x, y, button, key, elem_name, elem_type, screenshot) "
+        "VALUES (?,?,?,?,?,?,?,?,?)",
+        (999.0, "click", 10, 20, "Button.left", None, "", "Pane",
+         f"captures/{fname}"),
+    )
+    conn.commit()
+    conn.close()
+
+    wd = paths["workflow_dir"]
+    step_field = {
+        "action": "click", "x": 10, "y": 20,
+        "screenshot": f"captures/{fname}",
+    }
+    step_db = {"action": "click", "x": 10, "y": 20}
+
+    p1 = _resolve_screenshot(step_field, workflow_dir=wd)
+    p2 = _resolve_screenshot(step_db, workflow_dir=wd)
+    print(f"  from step.screenshot: {p1}")
+    print(f"  from workflow db:     {p2}")
+
+    assert p1 and "workflows" in p1.replace("\\", "/") and "/captures/" in p1.replace("\\", "/")
+    assert p2 == p1
+    # Must NOT pick up top-level captures even if one existed
+    wrong = _resolve_screenshot(
+        {"action": "click", "x": 10, "y": 20,
+         "screenshot": "captures/wrong_other_recording.png"},
+        workflow_dir=wd,
+    )
+    assert wrong is None, f"should not resolve missing file, got {wrong}"
+    print("  missing screenshot -> None (no cross-workflow fallback)")
+    print("\nOK")
+
+
 if __name__ == "__main__":
     import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "--selftest-screenshots":
+        _selftest_screenshot_resolution()
+        raise SystemExit(0)
     src = sys.argv[1] if len(sys.argv) > 1 else "notepad_greeting"
     out_txt = sys.argv[2] if len(sys.argv) > 2 else "transcript.txt"
     out_json = sys.argv[3] if len(sys.argv) > 3 else "transcript.json"

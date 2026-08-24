@@ -57,7 +57,11 @@ def ask_user_to_disambiguate(goal, elements, image_path, candidate_ids, reason):
 
     for attempt in range(3):
         try:
-            raw = input(prompt).strip()
+            from ui_prompts import ask_human, ui_bridge_active
+            if ui_bridge_active():
+                raw = ask_human("clarification", prompt).strip()
+            else:
+                raw = input(prompt).strip()
         except (EOFError, KeyboardInterrupt):
             print()
             return "cancel"

@@ -29,10 +29,12 @@ except Exception:
 # Reuse the exact approval / correction gate from agent_run (no behavior change)
 from agent_run import (
     _approve_or_correct,
+    _apply_clarification,
     _print_proposal,
     _history_line,
     _quiet_browser_teardown,
 )
+from safety_gate import require_irreversible_confirmation, harness_step_check
 
 
 def _fill_inputs(text, inputs):
@@ -83,6 +85,16 @@ def _run_reason_substep(subgoal, require_approval, max_steps, prefer_browser=Fal
             print(f"  [reason] stuck: {action.get('why')}")
             return "stuck"
 
+        cstatus, action = _apply_clarification(
+            subgoal, elements, path, history, action
+        )
+        if cstatus == "cancel":
+            return "stopped"
+        if cstatus == "skip":
+            history.append("note: user skipped an ambiguous step")
+            time.sleep(0.2)
+            continue
+
         status, action = _approve_or_correct(
             subgoal, elements, path, history, action, auto_approve
         )
@@ -111,11 +123,24 @@ def _run_reason_substep(subgoal, require_approval, max_steps, prefer_browser=Fal
             _print_proposal(retry, label="retry proposes")
             if retry.get("action") in ("done", "stuck"):
                 return retry.get("action")
+            cstatus, retry = _apply_clarification(
+                subgoal, elements, path, history, retry
+            )
+            if cstatus == "cancel":
+                return "stopped"
+            if cstatus == "skip":
+                history.append("note: user skipped an ambiguous retry step")
+                time.sleep(0.2)
+                continue
             status, retry = _approve_or_correct(
                 subgoal, elements, path, history, retry, auto_approve
             )
             if status != "ok":
                 return status
+            if not require_irreversible_confirmation(
+                harness_step_check(None, action=retry, description=subgoal)
+            ):
+                return "stopped_irreversible"
             ok2, msg2 = do_action(
                 retry, elements, target_procs=target_procs, title_hint=title_hint
             )
@@ -131,7 +156,8 @@ def _run_reason_substep(subgoal, require_approval, max_steps, prefer_browser=Fal
     return "ceiling"
 
 
-def run_harness(steps, inputs=None, require_approval=True, max_reason_steps=6):
+def run_harness(steps, inputs=None, require_approval=True, max_reason_steps=6,
+                start_index=0):
     """Run a list of HarnessStep (or dicts) through the router + engines.
 
     Returns a transcript: list of per-step result records.
@@ -149,14 +175,21 @@ def run_harness(steps, inputs=None, require_approval=True, max_reason_steps=6):
         except Exception as e:
             print(f"  [harness] prereq warning: {e}")
 
+    start_index = max(0, min(int(start_index or 0), len(steps)))
+    if start_index > 0:
+        print(f"[harness] starting at step {start_index + 1} "
+              f"(skipping first {start_index})")
+
     try:
-        for i, step in enumerate(steps, 1):
+        for i in range(start_index, len(steps)):
+            step = steps[i]
+            step_num = i + 1
             try:
                 step.validate()
             except AssertionError as e:
-                print(f"--- step {i}/{len(steps)} INVALID: {e} ---")
+                print(f"--- step {step_num}/{len(steps)} INVALID: {e} ---")
                 transcript.append({
-                    "step": i, "kind": getattr(step, "kind", "?"),
+                    "step": step_num, "kind": getattr(step, "kind", "?"),
                     "ok": False, "msg": f"invalid step: {e}",
                 })
                 break
@@ -172,7 +205,7 @@ def run_harness(steps, inputs=None, require_approval=True, max_reason_steps=6):
             }
             kind = decide_kind(step, ctx)
             desc = _fill_inputs(getattr(step, "description", "") or "", inputs)
-            print(f"--- step {i}/{len(steps)} [{kind}] {desc} ---")
+            print(f"--- step {step_num}/{len(steps)} [{kind}] {desc} ---")
 
             if kind == "reason":
                 subgoal = _fill_inputs(step.goal or desc, inputs)
@@ -183,9 +216,9 @@ def run_harness(steps, inputs=None, require_approval=True, max_reason_steps=6):
                     prefer_browser=prefer_browser,
                 )
                 transcript.append({
-                    "step": i, "kind": kind, "goal": subgoal, "outcome": outcome,
+                    "step": step_num, "kind": kind, "goal": subgoal, "outcome": outcome,
                 })
-                if outcome in ("stopped", "stuck", "failed"):
+                if outcome in ("stopped", "stuck", "failed", "stopped_irreversible"):
                     print(f"  [harness] stopping after reason outcome={outcome}")
                     break
                 continue
@@ -213,10 +246,26 @@ def run_harness(steps, inputs=None, require_approval=True, max_reason_steps=6):
             if action.get("action") == "stuck":
                 print(f"  stuck: {action.get('why')}")
                 transcript.append({
-                    "step": i, "kind": kind, "action": action,
+                    "step": step_num, "kind": kind, "action": action,
                     "ok": False, "msg": action.get("why"),
                 })
                 break
+
+            cstatus, action = _apply_clarification(
+                desc, elements, img, [], action
+            )
+            if cstatus == "cancel":
+                transcript.append({
+                    "step": step_num, "kind": kind, "action": action,
+                    "ok": False, "msg": "cancelled at clarification",
+                })
+                break
+            if cstatus == "skip":
+                transcript.append({
+                    "step": step_num, "kind": kind, "action": action,
+                    "ok": True, "msg": "skipped at clarification",
+                })
+                continue
 
             if require_approval:
                 status, action = _approve_or_correct(
@@ -224,18 +273,27 @@ def run_harness(steps, inputs=None, require_approval=True, max_reason_steps=6):
                 )
                 if status == "stopped":
                     transcript.append({
-                        "step": i, "kind": kind, "action": action,
+                        "step": step_num, "kind": kind, "action": action,
                         "ok": False, "msg": "stopped by human",
                     })
                     break
                 if status in ("done", "stuck"):
                     transcript.append({
-                        "step": i, "kind": kind, "action": action,
+                        "step": step_num, "kind": kind, "action": action,
                         "ok": status == "done", "msg": status,
                     })
                     if status == "stuck":
                         break
                     continue
+
+            if not require_irreversible_confirmation(
+                harness_step_check(step, action=action, description=desc)
+            ):
+                transcript.append({
+                    "step": step_num, "kind": kind, "action": action,
+                    "ok": False, "msg": "stopped at irreversible step",
+                })
+                break
 
             target_procs = ["chrome.exe"] if prefer_browser else None
             ok, msg = do_action(action, elements, target_procs=target_procs)
@@ -251,20 +309,43 @@ def run_harness(steps, inputs=None, require_approval=True, max_reason_steps=6):
                     [_history_line(action, False, msg)],
                 )
                 _print_proposal(retry, label="retry proposes")
+                cstatus, retry = _apply_clarification(
+                    desc, elements, img, [], retry
+                )
+                if cstatus == "cancel":
+                    transcript.append({
+                        "step": step_num, "kind": kind, "action": retry,
+                        "ok": False, "msg": "cancelled at clarification",
+                    })
+                    break
+                if cstatus == "skip":
+                    transcript.append({
+                        "step": step_num, "kind": kind, "action": retry,
+                        "ok": True, "msg": "skipped retry at clarification",
+                    })
+                    continue
                 if require_approval:
                     status, retry = _approve_or_correct(
                         desc, elements, img, [], retry, auto_approve
                     )
                     if status != "ok":
                         transcript.append({
-                            "step": i, "kind": kind, "action": retry,
+                            "step": step_num, "kind": kind, "action": retry,
                             "ok": False, "msg": f"retry {status}",
                         })
                         break
+                if not require_irreversible_confirmation(
+                    harness_step_check(step, action=retry, description=desc)
+                ):
+                    transcript.append({
+                        "step": step_num, "kind": kind, "action": retry,
+                        "ok": False, "msg": "stopped at irreversible step",
+                    })
+                    break
                 ok2, msg2 = do_action(retry, elements, target_procs=target_procs)
                 print(f"  {'OK' if ok2 else 'FAIL'}: {msg2}")
                 transcript.append({
-                    "step": i, "kind": kind, "action": retry,
+                    "step": step_num, "kind": kind, "action": retry,
                     "ok": ok2, "msg": msg2, "retried": True,
                 })
                 if not ok2:
@@ -272,7 +353,7 @@ def run_harness(steps, inputs=None, require_approval=True, max_reason_steps=6):
                     break
             else:
                 transcript.append({
-                    "step": i, "kind": kind, "action": action,
+                    "step": step_num, "kind": kind, "action": action,
                     "ok": ok, "msg": msg,
                 })
 

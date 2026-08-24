@@ -1,0 +1,46 @@
+{
+  "steps": [
+    {
+      "index": 0,
+      "kind": "reason",
+      "description": "New reason step",
+      "instruction": "New reason step",
+      "screenshot_url": null,
+      "inputs": [],
+      "outputs": [],
+      "deleted": true,
+      "action": null,
+      "target_name": null,
+      "target_type": null,
+      "goal": "New reason step"
+    },
+    {
+      "index": 1,
+      "kind": "reason",
+      "description": "New reason step",
+      "instruction": "New reason step",
+      "screenshot_url": null,
+      "inputs": [],
+      "outputs": [],
+      "deleted": true,
+      "action": null,
+      "target_name": null,
+      "target_type": null,
+      "goal": "New reason step"
+    },
+    {
+      "index": 2,
+      "kind": "reason",
+      "description": "New reason step",
+      "instruction": "New reason step",
+      "screenshot_url": null,
+      "inputs": [],
+      "outputs": [],
+      "deleted": true,
+      "action": null,
+      "target_name": null,
+      "target_type": null,
+      "goal": "New reason step"
+    }
+  ]
+}
