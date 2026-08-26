@@ -4,559 +4,1093 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>MimicAgent</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <style>
     :root {
-      --bg: #f3f4f6;
-      --surface: #ffffff;
-      --ink: #14171c;
-      --muted: #5b6470;
-      --line: #e3e6eb;
-      --accent: #1f6feb;
-      --accent-soft: #e8f0fe;
-      --danger: #b42318;
-      --danger-soft: #fef3f2;
-      --ok: #067647;
-      --ok-soft: #ecfdf3;
-      --wait: #b45309;
-      --wait-soft: #fffbeb;
-      --browser: #0e7490;
-      --native: #7c3aed;
-      --reason: #b45309;
-      --shadow: 0 1px 2px rgba(16, 24, 40, 0.05), 0 8px 24px rgba(16, 24, 40, 0.06);
-      --radius: 12px;
-      --font: "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
+      --paper: #EEF1F4; --surface: #FFFFFF; --ink: #141A22; --ink-2: #4A5762; --ink-3: #7C8894;
+      --rule: #D3DBE2; --rule-2: #E4EAEF;
+      --verified: #0F6E5C; --verified-bg: #E4F0ED;
+      --attention: #B8730E; --attention-bg: #FBF1E0;
+      --alert: #A6412F; --alert-bg: #F8E9E6;
+      --agent: #2C5578; --r: 6px;
     }
     * { box-sizing: border-box; }
-    html, body {
-      margin: 0; padding: 0;
-      background: var(--bg); color: var(--ink);
-      font-family: var(--font); font-size: 15px; line-height: 1.45;
+    html, body { height: 100%; }
+    body {
+      margin: 0; background: var(--paper); color: var(--ink);
+      font-family: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+      font-size: 14px; line-height: 1.55; -webkit-font-smoothing: antialiased;
     }
-    header.top {
-      position: sticky; top: 0; z-index: 30;
-      background: rgba(255,255,255,0.94);
-      backdrop-filter: blur(10px);
-      border-bottom: 1px solid var(--line);
-      padding: 0.75rem 1.25rem;
-      display: flex; align-items: center; justify-content: space-between;
-      gap: 1rem; flex-wrap: wrap;
+    button { font: inherit; color: inherit; cursor: pointer; }
+    input, textarea { font: inherit; color: inherit; }
+    :focus-visible { outline: 2px solid var(--agent); outline-offset: 2px; border-radius: 3px; }
+    .hide { display: none !important; }
+
+    .shell { display: grid; grid-template-columns: 252px 1fr; height: 100vh; overflow: hidden; }
+    .rail { background: var(--surface); border-right: 1px solid var(--rule); display: flex; flex-direction: column; min-height: 0; }
+    .brand { padding: 20px 18px 16px; border-bottom: 1px solid var(--rule-2); }
+    .brand h1 {
+      margin: 0; font-family: "Bricolage Grotesque", "IBM Plex Sans", sans-serif;
+      font-weight: 700; font-size: 19px; letter-spacing: -.02em; line-height: 1.1;
     }
-    .brand h1 { margin: 0; font-size: 1.1rem; font-weight: 650; letter-spacing: -0.02em; }
-    .brand .sub { color: var(--muted); font-size: 0.82rem; }
-    .header-actions { display: flex; align-items: center; gap: 0.45rem; flex-wrap: wrap; }
-    .approve-toggle {
-      display: flex; align-items: center; gap: 0.4rem;
-      font-size: 0.85rem; font-weight: 600; color: var(--muted);
-      user-select: none; white-space: nowrap;
+    .brand .tag {
+      margin-top: 3px; font-family: "IBM Plex Mono", monospace; font-size: 10px;
+      letter-spacing: .09em; text-transform: uppercase; color: var(--ink-3);
     }
-    .approve-toggle input { width: 0.95rem; height: 0.95rem; }
-    select, button, input[type="text"] {
-      font: inherit; border-radius: 8px; border: 1px solid var(--line);
+    .rail-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 18px 8px; }
+    .rail-head span {
+      font-family: "IBM Plex Mono", monospace; font-size: 10px;
+      letter-spacing: .09em; text-transform: uppercase; color: var(--ink-3);
     }
-    select, input[type="text"] {
-      background: #fff; color: var(--ink); padding: 0.45rem 0.65rem;
+    .newbtn {
+      border: 1px solid var(--rule); background: var(--surface); border-radius: var(--r);
+      width: 24px; height: 24px; font-size: 16px; color: var(--ink-2);
+      display: grid; place-items: center; padding: 0;
     }
-    button {
-      cursor: pointer; background: var(--surface); color: var(--ink);
-      padding: 0.5rem 0.9rem; font-weight: 600;
+    .newbtn:hover { border-color: var(--agent); color: var(--agent); }
+    .wflist { flex: 1; overflow-y: auto; padding: 0 10px 14px; }
+    .wf {
+      display: block; width: 100%; text-align: left; background: none; border: 0;
+      padding: 9px 10px; border-radius: var(--r);
     }
-    button:hover { background: #f8f9fb; }
-    button:disabled { opacity: 0.5; cursor: not-allowed; }
-    button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-    button.primary:hover { background: #1a5fd0; }
-    button.danger { color: var(--danger); border-color: transparent; background: transparent; }
-    button.danger:hover { background: var(--danger-soft); }
-    button.ghost { background: transparent; }
-    .layout {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) 340px;
-      gap: 1.1rem;
-      max-width: 1280px;
-      margin: 0 auto;
-      padding: 1.1rem 1.25rem 3rem;
-      align-items: start;
+    .wf:hover { background: var(--paper); }
+    .wf[aria-current="true"] { background: var(--paper); box-shadow: inset 2px 0 0 var(--agent); }
+    .wf-name { display: block; font-weight: 500; font-size: 13.5px; line-height: 1.3; }
+    .wf-meta { display: block; font-family: "IBM Plex Mono", monospace; font-size: 10.5px; color: var(--ink-3); margin-top: 2px; }
+    .dot { display: inline-block; width: 5px; height: 5px; border-radius: 50%; margin-right: 5px; vertical-align: 1px; }
+    .dot.ok { background: var(--verified); }
+    .dot.wip { background: var(--attention); }
+    .dot.idle { background: var(--rule); }
+    .rail-foot { padding: 12px 18px; border-top: 1px solid var(--rule-2); }
+    .rail-foot p { margin: 0; font-family: "IBM Plex Mono", monospace; font-size: 10.5px; color: var(--ink-3); }
+
+    .main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+    .topbar {
+      display: flex; align-items: baseline; gap: 14px; padding: 18px 30px 14px;
+      border-bottom: 1px solid var(--rule); background: var(--surface);
     }
-    #banner {
-      display: none; margin: 0 0 0.9rem; padding: 0.65rem 0.9rem;
-      border-radius: 8px; font-size: 0.9rem;
+    .topbar h2 {
+      margin: 0; font-family: "Bricolage Grotesque", "IBM Plex Sans", sans-serif;
+      font-weight: 700; font-size: 22px; letter-spacing: -.02em;
     }
-    #banner.show { display: block; background: var(--accent-soft); color: #1849a9; }
-    #banner.error { background: var(--danger-soft); color: var(--danger); }
-    #banner.ok { background: var(--ok-soft); color: var(--ok); }
-    #steps { display: flex; flex-direction: column; gap: 0.85rem; }
+    .counter { font-family: "IBM Plex Mono", monospace; font-size: 11.5px; color: var(--ink-3); }
+    .spacer { flex: 1; }
+    .btn {
+      border: 1px solid var(--rule); background: var(--surface); border-radius: var(--r);
+      padding: 6px 13px; font-size: 13px; font-weight: 500;
+    }
+    .btn:hover { border-color: var(--ink-3); }
+    .btn.primary { background: var(--verified); border-color: var(--verified); color: #fff; }
+    .btn.primary:hover { background: #0C5B4C; }
+    .btn:disabled { opacity: .4; cursor: not-allowed; }
+    .toast { display: none; margin: 0 30px; padding: 8px 12px; font-size: 13px; }
+    .toast.show { display: block; background: #E8EEF4; color: var(--agent); }
+    .toast.ok { background: var(--verified-bg); color: var(--verified); }
+    .toast.error { background: var(--alert-bg); color: var(--alert); }
+    .scroll { flex: 1; overflow-y: auto; padding: 26px 30px 56px; }
+    .col { max-width: 720px; margin: 0 auto; width: 100%; }
+
+    .composer {
+      display: flex; flex-direction: column; align-items: center; text-align: center;
+      padding: 48px 0 64px;
+    }
+    .composer h3, .empty h3 {
+      font-family: "Bricolage Grotesque", "IBM Plex Sans", sans-serif;
+      font-weight: 700; font-size: 28px; letter-spacing: -.025em; line-height: 1.2; margin: 0 0 10px;
+    }
+    .composer .lede, .empty p { margin: 0 0 24px; color: var(--ink-2); font-size: 15px; max-width: 480px; }
+    .composer .box {
+      width: 100%; background: var(--surface); border: 1px solid var(--rule); border-radius: 14px;
+      padding: 14px 16px 12px; text-align: left; box-shadow: 0 1px 2px rgba(20,26,34,.04);
+    }
+    .composer .box:focus-within { border-color: var(--agent); box-shadow: 0 0 0 3px rgba(44,85,120,.09); }
+    .composer textarea { width: 100%; border: 0; background: none; resize: none; min-height: 78px; line-height: 1.6; font-size: 15px; padding: 0; }
+    .composer textarea:focus { outline: none; }
+    .composer .foot { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+    .hint { flex: 1; font-family: "IBM Plex Mono", monospace; font-size: 10.5px; color: var(--ink-3); }
+    .egs { margin-top: 22px; display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+    .eg {
+      border: 1px solid var(--rule); background: var(--surface); border-radius: 20px;
+      padding: 6px 13px; font-size: 12.5px; color: var(--ink-2);
+    }
+    .eg:hover { border-color: var(--agent); color: var(--agent); }
+    .empty { padding: 52px 0; max-width: 480px; }
+
+    .ctxbar {
+      display: flex; gap: 12px; align-items: flex-start; background: var(--surface);
+      border: 1px solid var(--rule); border-radius: 10px; padding: 12px 15px; margin-bottom: 22px;
+    }
+    .ctxbar .k {
+      font-family: "IBM Plex Mono", monospace; font-size: 10px; letter-spacing: .09em;
+      text-transform: uppercase; color: var(--ink-3); flex-shrink: 0; padding-top: 2px;
+    }
+    .ctxbar p { margin: 0; flex: 1; font-size: 13.5px; color: var(--ink-2); line-height: 1.55; }
+    .ctxbar button { background: none; border: 0; color: var(--ink-3); font-size: 12px; }
+    .ctxbar button:hover { color: var(--agent); }
+
     .card {
-      background: var(--surface); border: 1px solid var(--line);
-      border-radius: var(--radius); box-shadow: var(--shadow);
-      padding: 0.95rem 1rem; display: grid; grid-template-columns: 160px 1fr; gap: 0.9rem;
+      position: relative; background: var(--surface); border: 1px solid var(--rule);
+      border-radius: 8px; margin-bottom: 12px; padding: 14px 18px 14px 46px;
     }
-    .card.deleted { opacity: 0.48; border-style: dashed; }
-    .thumb {
-      width: 160px; height: 104px; border-radius: 8px; border: 1px solid var(--line);
-      background: #eef1f4; overflow: hidden; display: flex; align-items: center;
-      justify-content: center; color: var(--muted); font-size: 0.78rem; text-align: center;
+    .card.active { border-color: var(--agent); box-shadow: 0 1px 3px rgba(20,26,34,.07); }
+    .card.done { background: #FBFCFD; }
+    .spine { position: absolute; left: 22px; top: 20px; height: 36px; width: 1px; background: var(--rule-2); }
+    .spine i {
+      position: absolute; left: -2.5px; width: 6px; height: 6px; border-radius: 50%;
+      background: var(--surface); border: 1.5px solid var(--rule); display: block;
     }
-    .thumb.has-img { cursor: zoom-in; }
-    .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
-    .body { display: flex; flex-direction: column; gap: 0.5rem; min-width: 0; }
-    .row { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
-    .num { font-weight: 700; font-variant-numeric: tabular-nums; }
-    .kind {
-      font-size: 0.72rem; font-weight: 650; text-transform: uppercase;
-      letter-spacing: 0.04em; padding: 0.15rem 0.45rem; border-radius: 999px;
+    .spine i:nth-child(1) { top: -1px; } .spine i:nth-child(2) { top: calc(25% - 1px); }
+    .spine i:nth-child(3) { top: calc(50% - 1px); } .spine i:nth-child(4) { top: calc(75% - 1px); }
+    .spine i:nth-child(5) { top: calc(100% - 1px); }
+    .spine i.on { border-color: var(--agent); background: var(--agent); }
+    .spine i.cur { border-color: var(--attention); background: var(--attention); transform: scale(1.35); }
+    .card.done .spine i.on { border-color: var(--verified); background: var(--verified); }
+    .chead { display: flex; align-items: center; gap: 10px; }
+    .num { font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--ink-3); min-width: 16px; }
+    .ctitle { flex: 1; font-weight: 500; font-size: 14.5px; }
+    .card.done .ctitle { color: var(--ink-2); font-weight: 400; }
+    .chip {
+      font-family: "IBM Plex Mono", monospace; font-size: 10px; letter-spacing: .06em;
+      text-transform: uppercase; padding: 2.5px 8px; border-radius: 20px; white-space: nowrap;
     }
-    .kind.native { color: var(--native); background: #f5f3ff; }
-    .kind.browser { color: var(--browser); background: #ecfeff; }
-    .kind.reason { color: var(--reason); background: #fffbeb; }
-    label.field { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.75rem; font-weight: 650; color: var(--muted); }
-    textarea {
-      font: inherit; color: var(--ink); border: 1px solid var(--line); border-radius: 8px;
-      padding: 0.5rem 0.6rem; resize: vertical; min-height: 2.5rem; background: #fafbfc;
+    .chip.wait { background: var(--attention-bg); color: var(--attention); }
+    .chip.ok { background: var(--verified-bg); color: var(--verified); }
+    .chip.new { background: var(--paper); color: var(--ink-3); }
+    .summary { font-family: "IBM Plex Mono", monospace; font-size: 11.5px; color: var(--ink-3); margin-top: 3px; }
+    .cbody, .cbody { margin-top: 15px; padding-top: 15px; border-top: 1px solid var(--rule-2); }
+    .field { margin-bottom: 12px; }
+    .field label {
+      display: block; font-family: "IBM Plex Mono", monospace; font-size: 10px;
+      letter-spacing: .09em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 5px;
     }
-    textarea:focus, select:focus, input:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
-    .foot { display: flex; justify-content: space-between; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
-    .add-row { display: flex; justify-content: center; }
-    .add-row button { font-size: 0.82rem; color: var(--muted); }
-    aside.run {
-      position: sticky; top: 4.4rem;
-      background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
-      box-shadow: var(--shadow); padding: 1rem; min-height: 240px;
+    .field input {
+      width: 100%; border: 1px solid var(--rule-2); border-radius: var(--r);
+      padding: 8px 11px; background: var(--paper);
     }
-    aside.run h2 { margin: 0 0 0.65rem; font-size: 0.92rem; }
-    .progress { font-weight: 650; margin-bottom: 0.5rem; }
-    .log {
-      font-family: ui-monospace, Consolas, monospace; font-size: 0.78rem;
-      background: #0f172a; color: #e2e8f0; border-radius: 8px; padding: 0.65rem;
-      max-height: 220px; overflow: auto; white-space: pre-wrap; min-height: 6rem;
+    .field input:focus { background: var(--surface); border-color: var(--agent); outline: none; }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+
+    .qa { margin: 14px 0 0; }
+    .q { display: flex; gap: 9px; padding: 9px 0; border-top: 1px solid var(--rule-2); }
+    .q:first-child { border-top: 0; }
+    .q .mark { font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--agent); font-weight: 500; flex-shrink: 0; }
+    .q p { margin: 0 0 6px; }
+    .q input {
+      width: 100%; border: 1px solid var(--rule-2); border-radius: var(--r);
+      padding: 6px 10px; background: var(--paper);
     }
-    .wait-box {
-      display: none; margin-top: 0.75rem; padding: 0.7rem; border-radius: 8px;
-      background: var(--wait-soft); border: 1px solid #fde68a;
+    .q input:focus { background: var(--surface); border-color: var(--agent); outline: none; }
+    .answered { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--ink-2); background: var(--paper); border-radius: var(--r); padding: 5px 9px; display: inline-block; }
+
+    .anchor { display: flex; flex-direction: column; gap: 10px; background: var(--paper); border: 1px solid var(--rule); border-radius: var(--r); padding: 12px; margin: 12px 0; }
+    .crop, .crop { position: relative; width: 100%; }
+    .crop img, .crop img {
+      width: 100%; max-height: 240px; object-fit: contain; background: var(--surface);
+      border: 1px solid var(--rule); display: block;
     }
-    .wait-box.show { display: block; }
-    .wait-box .kind-label { font-weight: 700; text-transform: uppercase; font-size: 0.72rem; color: var(--wait); }
-    .wait-box p { margin: 0.4rem 0 0.55rem; }
-    .wait-box .answer-row { display: flex; gap: 0.4rem; }
-    .wait-box input { flex: 1; }
-    #lightbox {
-      display: none; position: fixed; inset: 0; z-index: 80;
-      background: rgba(15, 23, 42, 0.72); align-items: center; justify-content: center;
-      padding: 1.5rem; cursor: zoom-out;
+    .crop.tight, .crop.tight { width: 96px; height: 96px; }
+    .crop.tight img, .crop.tight img { width: 96px; height: 96px; image-rendering: pixelated; }
+    .anchor-body, .anchor-body { min-width: 0; flex: 1; }
+    .k { font-family: "IBM Plex Mono", monospace; font-size: 10px; letter-spacing: .09em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 4px; }
+    .anchor-body dl, .anchor-body dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; }
+    .anchor-body dt, .anchor-body dt { font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--ink-3); }
+    .anchor-body dd, .anchor-body dd { margin: 0; font-family: "IBM Plex Mono", monospace; font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    .und { border: 1px solid var(--rule); border-radius: var(--r); overflow: hidden; margin: 12px 0; }
+    .und-h, .und-h { background: var(--paper); padding: 7px 12px; border-bottom: 1px solid var(--rule); font-family: "IBM Plex Mono", monospace; font-size: 10px; letter-spacing: .09em; text-transform: uppercase; color: var(--ink-2); }
+    .und-b, .und-b { padding: 12px; }
+    .say { margin: 0 0 11px; font-size: 13.8px; line-height: 1.6; }
+    .und-b dl, .und-b dl { margin: 0; display: grid; grid-template-columns: 112px 1fr; gap: 5px 12px; }
+    .und-b dt, .und-b dt { font-family: "IBM Plex Mono", monospace; font-size: 10.5px; color: var(--ink-3); }
+    .und-b dd, .und-b dd { margin: 0; font-family: "IBM Plex Mono", monospace; font-size: 12px; }
+    .und-b dd.none, .und-b dd.none { color: var(--ink-3); }
+    .assume { margin-top: 11px; background: var(--attention-bg); border-left: 2px solid var(--attention); padding: 8px 11px; }
+    .assume .k { color: var(--attention); }
+    .assume ul { margin: 0; padding-left: 16px; }
+    .assume li { font-size: 12.8px; color: var(--ink-2); }
+    .learned { margin: 12px 0; padding: 10px 12px; background: var(--verified-bg); border-left: 2px solid var(--verified); }
+    .learned p { margin: 0; font-size: 13.5px; }
+    .field textarea {
+      width: 100%; border: 1px solid var(--rule-2); border-radius: var(--r);
+      padding: 8px 11px; background: var(--paper); min-height: 72px; resize: vertical;
     }
-    #lightbox.show { display: flex; }
-    #lightbox img { max-width: 94vw; max-height: 88vh; border-radius: 10px; }
+    .field textarea:focus { background: var(--surface); border-color: var(--agent); outline: none; }
+    .webchk { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-2); margin: 0 0 12px; }
+    .webchk input { width: 14px; height: 14px; }
+    .xbtn {
+      background: none; border: 0; color: var(--ink-3); font-size: 12px; padding: 0 4px;
+    }
+    .xbtn:hover { color: var(--alert); }
+    .shots { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+    .shot { position: relative; width: 140px; }
+    .shot img { width: 140px; height: 90px; object-fit: cover; border: 1px solid var(--rule); border-radius: 6px; display: block; }
+    .shot .xbtn { position: absolute; top: 2px; right: 2px; background: var(--surface); border-radius: 4px; }
+    .start {
+      background: var(--surface); border: 1px solid var(--rule); border-radius: 8px;
+      padding: 14px 18px; margin-bottom: 16px;
+    }
+    .start .lede { margin: 6px 0 12px; color: var(--ink-2); font-size: 13.5px; }
+    .witnesses { margin: 10px 0; border: 1px solid var(--rule); border-radius: var(--r); overflow: hidden; }
+    .wit {
+      display: grid; grid-template-columns: 64px 1fr 52px; gap: 8px; align-items: start;
+      padding: 7px 10px; border-top: 1px solid var(--rule-2); font-size: 12.5px;
+    }
+    .wit:first-child { border-top: 0; }
+    .wit .pipe { font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--ink-3); text-transform: uppercase; }
+    .wit .account { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--ink); }
+    .wit .conf { font-family: "IBM Plex Mono", monospace; font-size: 10px; color: var(--ink-3); text-align: right; }
+    .wit.primary { background: var(--verified-bg); }
+    .wit.fallback { opacity: 0.55; }
+    .wit-agree { font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--ink-3); padding: 6px 10px; }
+    .wit-q { background: var(--attention-bg); border: 1px solid var(--attention); border-radius: var(--r); padding: 10px 12px; margin: 10px 0; }
+    .wit-q .k { color: var(--attention); }
+    .wit-q p { margin: 6px 0; font-family: "IBM Plex Mono", monospace; font-size: 12.5px; }
+
+    .modes { display: flex; gap: 8px; margin: 10px 0; }
+    .mode { flex: 1; border: 1px solid var(--rule); border-radius: var(--r); background: var(--surface); padding: 9px 11px; text-align: left; }
+    .mode:hover { border-color: var(--agent); }
+    .mode[aria-pressed="true"] { border-color: var(--agent); background: #F4F8FB; }
+    .mode b { display: block; font-weight: 500; font-size: 13px; }
+    .mode span { font-size: 11.5px; color: var(--ink-3); }
+
+    .reflect { border-left: 2px solid var(--verified); background: var(--verified-bg); padding: 10px 12px; margin: 12px 0; }
+    .reflect.bad { border-left-color: var(--alert); background: var(--alert-bg); }
+    .reflect .k { color: var(--verified); }
+    .reflect.bad .k { color: var(--alert); }
+    .reflect p { margin: 0 0 4px; font-size: 13px; }
+    .reflect code { font-family: "IBM Plex Mono", monospace; font-size: 12px; }
+
+    .addstep {
+      width: 100%; border: 1px dashed var(--rule); background: none; border-radius: 8px;
+      padding: 13px; color: var(--ink-3); font-size: 13.5px; margin-top: 4px;
+    }
+    .addstep:hover { border-color: var(--agent); color: var(--agent); background: var(--surface); }
+
+    .drawer { border-top: 1px solid var(--rule); background: var(--surface); flex-shrink: 0; }
+    .drawer-h { display: flex; align-items: center; gap: 10px; padding: 8px 30px; font-family: "IBM Plex Mono", monospace; font-size: 11px; }
+    .st { font-weight: 500; letter-spacing: .06em; text-transform: uppercase; }
+    .st.run { color: var(--attention); } .st.fin { color: var(--verified); } .st.fail { color: var(--alert); }
+    .drawer-h button { background: none; border: 0; color: var(--ink-3); font-size: 11px; }
+    .log { max-height: 150px; overflow-y: auto; padding: 4px 30px 12px; font-family: "IBM Plex Mono", monospace; font-size: 11.5px; line-height: 1.7; color: var(--ink-2); }
+    .prompt { margin: 8px 30px 14px; background: var(--attention-bg); border: 1px solid var(--attention); border-radius: var(--r); padding: 11px 13px; }
+    .prompt p { margin: 0 0 8px; font-size: 13.5px; }
+    .row { display: flex; gap: 8px; }
+    .prompt input { flex: 1; border: 1px solid var(--rule); border-radius: var(--r); padding: 6px 10px; }
+
     @media (max-width: 900px) {
-      .layout { grid-template-columns: 1fr; }
-      aside.run { position: static; }
-      .card { grid-template-columns: 1fr; }
-      .thumb { width: 100%; height: 160px; }
+      .shell { grid-template-columns: 1fr; }
+      .rail { display: none; }
+      .scroll, .topbar, .drawer-h, .log, .toast { padding-left: 18px; padding-right: 18px; }
     }
   </style>
 </head>
 <body>
-  <header class="top">
+<div class="shell">
+  <nav class="rail" aria-label="Workflows">
     <div class="brand">
       <h1>MimicAgent</h1>
-      <div class="sub">Record · instruct · compile · run</div>
+      <div class="tag">teach · show · verify</div>
     </div>
-    <div class="header-actions">
-      <select id="wf-picker" aria-label="Workflow"></select>
-      <button type="button" id="btn-new">New</button>
-      <button type="button" id="btn-record">Record</button>
-      <button type="button" id="btn-save">Save</button>
-      <label class="approve-toggle" for="chk-approve">
-        <input type="checkbox" id="chk-approve" />
-        Approve every step
-      </label>
-      <button type="button" class="primary" id="btn-run">Run</button>
+    <div class="rail-head">
+      <span>Workflows</span>
+      <button class="newbtn" id="newWf" title="New workflow" aria-label="New workflow">+</button>
     </div>
-  </header>
+    <div class="wflist" id="wfList"></div>
+    <div class="rail-foot"><p id="engineState">engine idle</p></div>
+  </nav>
 
-  <div class="layout">
-    <section>
-      <div id="banner" role="status"></div>
-      <div id="steps"></div>
-    </section>
-    <aside class="run" id="run-panel">
-      <h2>Run</h2>
-      <div class="progress" id="run-progress">No run</div>
-      <div class="log" id="run-log">(idle)</div>
-      <div class="wait-box" id="wait-box">
-        <div class="kind-label" id="wait-kind">approval</div>
-        <p id="wait-text"></p>
-        <div class="answer-row">
-          <input type="text" id="wait-input" placeholder="y / skip / your answer" />
-          <button type="button" class="primary" id="btn-answer">Send</button>
+  <div class="main">
+    <header class="topbar">
+      <h2 id="wfTitle">No workflow</h2>
+      <span class="counter" id="wfCounter"></span>
+      <span class="spacer"></span>
+      <button class="btn" id="btnCompile" disabled>Check workflow</button>
+      <button class="btn primary" id="btnRun" disabled>Run</button>
+    </header>
+    <div class="toast" id="toast" role="status"></div>
+
+    <div class="scroll">
+      <div class="col">
+        <div class="empty" id="empty">
+          <h3>Teach it one step at a time.</h3>
+          <p>Describe the task, then add a step. It asks what it needs, you can show it on screen, and it tells you what it understood before it does anything.</p>
+          <button class="btn primary" id="emptyNew">Create a workflow</button>
+        </div>
+
+        <section class="composer hide" id="composer">
+          <h3 id="composerTitle">What are we teaching?</h3>
+          <p class="lede">Describe the whole task in your own words. It uses this to ask better questions about each step.</p>
+          <div class="box">
+            <textarea id="ctxText" placeholder="I keep a daily log. Every day I open Notepad, write what I worked on, and save it with today's date in the filename."></textarea>
+            <div class="foot">
+              <span class="hint">Plain language is fine · Ctrl+Enter to save</span>
+              <button class="btn primary" id="ctxSave">Start teaching</button>
+            </div>
+          </div>
+          <div class="egs">
+            <button class="eg" data-eg="I keep a daily log. Every day I open Notepad, write what I worked on, and save it with today's date in the filename.">daily log</button>
+            <button class="eg" data-eg="Open a text file in Notepad, type a marker, and save.">notepad marker</button>
+            <button class="eg" data-eg="Every Monday I download last week's statement, rename it with the date, and file it in my accounts folder.">weekly filing</button>
+          </div>
+        </section>
+
+        <section class="ctxbar hide" id="ctxBar">
+          <span class="k">Teaching</span>
+          <p id="ctxSummary"></p>
+          <button type="button" id="ctxEdit">edit</button>
+        </section>
+
+        <section class="start hide" id="startCard">
+          <div class="k">Starting screen</div>
+          <p class="lede">Show the screen every run begins on. Say what changes each time — for outreach, that’s the LinkedIn profile.</p>
+          <div id="startPreview"></div>
+          <div class="field">
+            <label>What is this screen?</label>
+            <input id="startDesc" placeholder="A LinkedIn profile page" />
+          </div>
+          <div class="field">
+            <label>What changes each run?</label>
+            <input id="startVaries" placeholder="The person / profile keeps changing" />
+          </div>
+          <div id="startLearned" class="learned hide"></div>
+          <div class="actions">
+            <button class="btn" id="startShow">Show me this screen</button>
+            <button class="btn primary" id="startMark">Mark what changes</button>
+          </div>
+        </section>
+
+        <div id="steps"></div>
+        <button class="addstep hide" id="addStep">+ Add the next step</button>
+      </div>
+    </div>
+
+    <section class="drawer hide" id="drawer" aria-label="Run">
+      <div class="drawer-h">
+        <span class="st run" id="runState">RUNNING</span>
+        <span id="runStep"></span>
+        <span class="spacer"></span>
+        <button type="button" id="drawerClose">close</button>
+      </div>
+      <div class="log" id="runLog"></div>
+      <div class="prompt hide" id="runPrompt">
+        <p id="promptText"></p>
+        <div class="row">
+          <input id="promptInput" placeholder="Your answer" />
+          <button class="btn primary" id="promptSend">Send</button>
         </div>
       </div>
-    </aside>
+    </section>
   </div>
-  <div id="lightbox" aria-hidden="true"><img alt="Enlarged screenshot" /></div>
+</div>
 
-  <script>
-    (function () {
-      "use strict";
-      var name = "";
-      var steps = [];
-      var runId = null;
-      var pollTimer = null;
-      var recording = false;
+<script>
+(function () {
+  "use strict";
+  var STAGES = ["draft", "questioning", "understood", "demonstrated", "approved"];
+  var state = {
+    workflows: [], current: null, context: "", steps: [],
+    pending: {}, demoMode: {}
+  };
 
-      var picker = document.getElementById("wf-picker");
-      var stepsEl = document.getElementById("steps");
-      var banner = document.getElementById("banner");
-      var lb = document.getElementById("lightbox");
-      var lbImg = lb.querySelector("img");
+  function $(id) { return document.getElementById(id); }
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+    });
+  }
+  function toast(msg, kind) {
+    var el = $("toast");
+    el.textContent = msg || "";
+    el.className = "toast" + (msg ? " show" + (kind ? " " + kind : "") : "");
+  }
+  function api(path, body) {
+    var opt = { method: body === undefined ? "GET" : "POST", headers: {} };
+    if (body !== undefined) {
+      opt.headers["Content-Type"] = "application/json";
+      opt.body = JSON.stringify(body);
+    }
+    return fetch(path, opt).then(function (r) {
+      return r.json().then(function (d) {
+        d._http = r.status;
+        return d;
+      });
+    });
+  }
+  function fail(d, fallback) {
+    if (d && d.ok === false) throw new Error(d.error || fallback || "request failed");
+    return d;
+  }
 
-      function flash(msg, kind) {
-        banner.textContent = msg || "";
-        banner.className = msg ? ("show" + (kind ? " " + kind : "")) : "";
-      }
+  function unanswered(log) {
+    return (log || []).filter(function (q) { return q.q && !(q.a || "").trim(); }).map(function (q) { return q.q; });
+  }
+  function pendingItems(s) {
+    var items = (s.qa_history || []).filter(function (q) { return q.q && !(q.a || "").trim(); });
+    var extra = s.understanding && (s.understanding.clarifying_question || s.understanding.followup_question);
+    if (extra && ["understood", "demonstrated", "approved"].indexOf(s.status) < 0) {
+      var have = items.some(function (q) { return q.q === extra; });
+      if (!have) items.push({ q: extra, kind: "clarify" });
+    }
+    (state.pending[s.id] || []).forEach(function (q) {
+      var have = items.some(function (it) { return it.q === q; });
+      if (!have) items.push({ q: q, kind: "clarify" });
+    });
+    return items;
+  }
+  function pendingOf(s) {
+    return pendingItems(s).map(function (q) { return q.q; });
+  }
+  function cropUrl(anchor) {
+    var rel = (anchor && (anchor.preview_path || anchor.preview_path || anchor.context_path || anchor.crop_path)) || "";
+    if (!rel || !state.current) return "";
+    return "/screenshots/crop.png?name=" + encodeURIComponent(state.current) + "&rel=" + encodeURIComponent(rel);
+  }
 
-      function json(method, path, body) {
-        var opts = { method: method, headers: {} };
-        if (body !== undefined) {
-          opts.headers["Content-Type"] = "application/json";
-          opts.body = JSON.stringify(body);
+  function renderRail() {
+    var html = (state.workflows || []).map(function (w) {
+      var n = w.steps || 0;
+      var cls = w.status === "ready" ? "ok" : (n || w.status === "draft" ? "wip" : "idle");
+      var label = n === 0 ? "empty" : n + " step" + (n === 1 ? "" : "s");
+      return '<button class="wf" data-wf="' + esc(w.name) + '" aria-current="' + (w.name === state.current) + '">'
+        + '<span class="wf-name">' + esc(w.name) + "</span>"
+        + '<span class="wf-meta"><i class="dot ' + cls + '"></i>' + label + "</span></button>";
+    }).join("");
+    $("wfList").innerHTML = html || '<p style="padding:8px 10px;color:var(--ink-3);font-size:12.5px">Nothing taught yet.</p>';
+    document.querySelectorAll(".wf").forEach(function (b) {
+      b.onclick = function () { openWf(b.getAttribute("data-wf")); };
+    });
+  }
+
+  function spine(status) {
+    var i = STAGES.indexOf(status);
+    if (i < 0) i = 0;
+    return '<div class="spine">' + STAGES.map(function (_, n) {
+      return '<i class="' + (n < i ? "on" : n === i ? "cur" : "") + '"></i>';
+    }).join("") + "</div>";
+  }
+  function chip(s) {
+    if (s === "approved") return '<span class="chip ok">verified</span>';
+    if (s === "draft") return '<span class="chip new">new</span>';
+    var t = { questioning: "needs you", understood: "ready to demo", demonstrated: "demo passed" }[s] || s;
+    return '<span class="chip wait">' + esc(t) + "</span>";
+  }
+  function activeIndex() {
+    var i = state.steps.findIndex(function (s) { return s.status !== "approved"; });
+    return i === -1 ? Math.max(0, state.steps.length - 1) : i;
+  }
+  function row(k, v) {
+    return "<dt>" + k + "</dt><dd class=\"" + (v ? "" : "none") + "\">" + (v || "none") + "</dd>";
+  }
+
+  function bodyHtml(s) {
+    var h = "";
+    var pending = pendingOf(s);
+    h += '<div class="field"><label>What does this step do?</label>'
+      + '<input data-desc="' + s.id + '" value="' + esc(s.user_description) + '" placeholder="Click the text editor in Notepad"></div>'
+      + '<div class="field"><label>What changes each run?</label>'
+      + '<input data-dyn="' + s.id + '" value="' + esc(s.varies_note) + '" placeholder="Nothing, or e.g. {filename}"></div>';
+    if (s.learned && s.learned.summary) {
+      h += '<div class="learned"><div class="k">What I learned watching you '
+        + '<button type="button" class="xbtn" data-act="clear" data-step="' + s.id + '" data-key="learned">remove</button></div>'
+        + "<p>" + esc(s.learned.summary) + "</p></div>";
+    }
+    h += '<div class="field"><label>Your notes for this step</label>'
+      + '<textarea data-mem="' + s.id + '" rows="3" placeholder="e.g. write the cold email in this voice: short, specific, no fluff">'
+      + esc(s.memory_note || "") + "</textarea></div>"
+      + '<label class="webchk"><input type="checkbox" data-web="' + s.id + '"'
+      + (s.web_allowed ? " checked" : "") + "> May look this up on the web when running</label>";
+    var answered = (s.qa_history || []).filter(function (q) { return (q.a || "").trim(); });
+    if (answered.length) {
+      h += '<div class="qa">' + answered.map(function (q) {
+        return '<div class="q"><span class="mark">asked</span><div><p>' + esc(q.q) + '</p><span class="answered">' + esc(q.a) + "</span></div></div>";
+      }).join("") + "</div>";
+    }
+    var openQs = pendingItems(s);
+    if (openQs.length) {
+      h += '<div class="qa">' + openQs.map(function (item, n) {
+        var q = item.q || item;
+        var kind = item.kind || "";
+        var block = '<div class="q"><span class="mark">asks</span><div><p>' + esc(q) + "</p>";
+        if (kind === "show_confirm") {
+          block += '<div class="actions">'
+            + '<button class="btn primary" data-act="showyes" data-step="' + s.id + '" data-q="' + esc(q) + '">Yes, that one</button>'
+            + '<button class="btn" data-act="showno" data-step="' + s.id + '" data-q="' + esc(q) + '">No, show me again</button>'
+            + "</div>";
         }
-        return fetch(path, opts).then(function (r) {
-          return r.json().then(function (d) {
-            d._http = r.status;
-            return d;
+        block += '<input data-ans="' + s.id + '" data-q="' + esc(q) + '" placeholder="Type your answer here"'
+          + (n === 0 ? " autofocus" : "") + "></div></div>";
+        return block;
+      }).join("") + "</div>";
+    }
+    var photos = s.photos || [];
+    if (photos.length) {
+      h += '<div class="shots">' + photos.map(function (p) {
+        var rel = p.path || p;
+        return '<div class="shot"><img src="' + esc(cropUrl({ preview_path: rel })) + '" alt="">'
+          + '<button type="button" class="xbtn" data-act="dropphoto" data-step="' + s.id + '" data-path="' + esc(rel) + '">remove</button></div>';
+      }).join("") + "</div>";
+    }
+    h += '<div class="field"><label>Add a screenshot</label>'
+      + '<input type="file" accept="image/*" data-photo="' + s.id + '"></div>';
+    if (s.anchor && s.anchor.witnesses) {
+      var wits = s.anchor.witnesses;
+      var agr = s.anchor.agreement || "";
+      var primPipe = (s.anchor.primary && s.anchor.primary.pipeline) || "";
+      var unresolved = !!s.anchor.conflict_unresolved;
+      h += '<div class="witnesses">';
+      ["a11y", "dom", "vision"].forEach(function (k) {
+        var w = wits[k] || {};
+        var cls = "wit";
+        if (primPipe === k && !unresolved) cls += " primary";
+        else if (primPipe && primPipe !== k) cls += " fallback";
+        var mark = (primPipe === k && !unresolved) ? "primary" : (w.confidence || "");
+        h += '<div class="' + cls + '"><span class="pipe">' + k + '</span>'
+          + '<span class="account">' + esc(w.account || (w.saw ? "saw something" : "saw nothing")) + "</span>"
+          + '<span class="conf">' + esc(mark) + "</span></div>";
+      });
+      if (!unresolved) {
+        var line = agr === "agree" ? "all three agree" : (agr === "single" ? "only one pipeline saw this" : agr);
+        if (primPipe) line += primPipe ? (" · primary " + primPipe) : "";
+        h += '<div class="wit-agree">' + esc(line) + "</div>";
+      }
+      h += "</div>";
+      if (unresolved) {
+        var q = (s.qa_history || []).slice().reverse().find(function (qq) {
+          return qq.kind === "witness_conflict" && !(qq.a || "").trim();
+        });
+        var choices = (q && q.choices) || ["a11y", "vision", "dom", "neither — let me show you again"];
+        h += '<div class="wit-q"><div class="k">They disagree — which one do you mean?</div>'
+          + (q ? "<p>" + esc(q.q) + "</p>" : "")
+          + '<div class="actions">'
+          + choices.map(function (c) {
+            return '<button class="btn' + (c.indexOf("neither") === 0 ? "" : " primary") + '" data-act="witness" data-step="' + s.id + '" data-choice="' + esc(c) + '">' + esc(c) + "</button>";
+          }).join("")
+          + "</div></div>";
+      }
+    }
+    if (s.anchor) {
+      var p = s.anchor.primary || {};
+      var src = cropUrl(s.anchor);
+      var tight = !!s.anchor.focused;
+      h += '<div class="anchor"><div class="crop' + (tight ? " tight" : "") + '">'
+        + (src ? '<img src="' + esc(src) + '" alt="">' : "")
+        + '</div><div class="anchor-body"><div class="k">Captured screen '
+        + '<button type="button" class="xbtn" data-act="clear" data-step="' + s.id + '" data-key="anchor">remove</button></div><dl>'
+        + "<dt>name</dt><dd>" + esc(p.name || "—") + "</dd>"
+        + "<dt>type</dt><dd>" + esc(p.control_type || p.kind || "—") + "</dd>"
+        + "<dt>path</dt><dd>" + esc(s.anchor.parent_path || "—") + "</dd></dl>"
+        + "</div></div>";
+    }
+    if (s.understanding) {
+      var u = s.understanding;
+      h += '<div class="und"><div class="und-h">What I understood '
+        + '<button type="button" class="xbtn" data-act="clear" data-step="' + s.id + '" data-key="understanding">remove</button></div><div class="und-b">'
+        + '<div class="field"><label>In plain words</label>'
+        + '<textarea data-und="' + s.id + '" data-field="plain_summary" rows="3">' + esc(u.plain_summary || "") + "</textarea></div>"
+        + '<div class="field"><label>target</label><input data-und="' + s.id + '" data-field="target" value="' + esc(u.target || "") + '"></div>'
+        + '<div class="field"><label>action</label><input data-und="' + s.id + '" data-field="action" value="' + esc(u.action || "") + '"></div>'
+        + '<div class="field"><label>success when</label><input data-und="' + s.id + '" data-field="success_check" value="' + esc(u.success_check || "") + '"></div>';
+      h += "</div></div>";
+    }
+    if (s.status === "understood" || s.status === "demonstrated") {
+      var mode = state.demoMode[s.id] || "manual";
+      h += '<div class="modes">'
+        + '<button class="mode" data-mode="manual" data-step="' + s.id + '" aria-pressed="' + (mode !== "replay") + '"><b>I\'ll set the screen up</b><span>Faster when you are already there</span></button>'
+        + '<button class="mode" data-mode="replay" data-step="' + s.id + '" aria-pressed="' + (mode === "replay") + '"><b>Run the earlier steps for me</b><span>Reaches the state automatically</span></button></div>'
+        + '<div class="field"><label>Test values (optional JSON)</label>'
+        + '<input data-tvals="' + s.id + '" placeholder=\'{"filename":"C:\\\\tmp\\\\a.txt"}\'></div>';
+    }
+    if (s.reflection) {
+      var r = s.reflection;
+      var bad = r.matches_understanding === false;
+      h += '<div class="reflect' + (bad ? " bad" : "") + '"><div class="k">'
+        + (bad ? "This does not match what I said" : "What happened") + "</div>"
+        + "<p>" + esc(r.what_i_did || "") + "</p>"
+        + "<p><code>" + esc(r.what_i_observed || "") + "</code></p>"
+        + (bad && r.differences && r.differences.length ? "<p>" + esc(r.differences.join(" · ")) + "</p>" : "")
+        + "</div>";
+    }
+    h += '<div class="actions">';
+    if (pending.length || pendingItems(s).length) {
+      h += '<button class="btn primary" data-act="train" data-step="' + s.id + '">Send answers</button>'
+        + '<button class="btn" data-act="show" data-step="' + s.id + '">Show me instead</button>';
+    } else if (s.understanding && (s.status === "draft" || s.status === "questioning")) {
+      h += '<button class="btn primary" data-act="okund" data-step="' + s.id + '">Looks right</button>'
+        + '<button class="btn" data-act="rejund" data-step="' + s.id + '">Not quite</button>';
+    } else if (s.status === "draft" || s.status === "questioning") {
+      h += '<button class="btn primary" data-act="train" data-step="' + s.id + '">Ask me what you need</button>'
+        + '<button class="btn" data-act="show" data-step="' + s.id + '">Show me on screen</button>';
+    } else if (s.status === "understood") {
+      h += '<button class="btn primary" data-act="demo" data-step="' + s.id + '">Demo this step</button>';
+    } else if (s.status === "demonstrated") {
+      h += '<button class="btn primary" data-act="okbeh" data-step="' + s.id + '">Approve step</button>'
+        + '<button class="btn" data-act="demo" data-step="' + s.id + '">Demo again</button>';
+    }
+    h += '<button class="btn" data-act="delstep" data-step="' + s.id + '">Remove step</button>';
+    h += "</div>";
+    return h;
+  }
+
+  function renderSteps() {
+    var wrap = $("steps");
+    if (!state.steps.length) { wrap.innerHTML = ""; return; }
+    var ai = activeIndex();
+    wrap.innerHTML = state.steps.map(function (s, i) {
+      var uses = (s.consumes && s.consumes.length) ? ("uses " + s.consumes.join(", ")) : "uses nothing";
+      if (s.status === "approved") {
+        return '<article class="card done">' + spine(s.status)
+          + '<div class="chead"><span class="num">' + (i + 1) + '</span><span class="ctitle">'
+          + esc(s.user_description) + "</span>" + chip(s.status) + "</div>"
+          + '<div class="summary">' + esc((s.action && s.action.action) || "step") + " · " + esc(uses) + " · verified</div>"
+          + '<div class="cbody">' + bodyHtml(s) + "</div></article>";
+      }
+      return '<article class="card' + (i === ai ? " active" : "") + '">' + spine(s.status)
+        + '<div class="chead"><span class="num">' + (i + 1) + '</span><span class="ctitle">'
+        + esc(s.user_description || "Untitled step") + "</span>" + chip(s.status) + "</div>"
+        + '<div class="cbody">' + bodyHtml(s) + "</div></article>";
+    }).join("");
+    bindCards();
+  }
+
+  function bindCards() {
+    document.querySelectorAll("[data-desc]").forEach(function (el) {
+      el.onchange = function () { patchStep(el.getAttribute("data-desc"), { description: el.value }); };
+    });
+    document.querySelectorAll("[data-dyn]").forEach(function (el) {
+      el.onchange = function () { patchStep(el.getAttribute("data-dyn"), { varies_note: el.value }); };
+    });
+    document.querySelectorAll("[data-mem]").forEach(function (el) {
+      el.onchange = function () { patchStep(el.getAttribute("data-mem"), { memory_note: el.value }); };
+    });
+    document.querySelectorAll("[data-web]").forEach(function (el) {
+      el.onchange = function () { patchStep(el.getAttribute("data-web"), { web_allowed: el.checked }); };
+    });
+    document.querySelectorAll("[data-und]").forEach(function (el) {
+      el.onchange = function () {
+        var und = {};
+        und[el.getAttribute("data-field")] = el.value;
+        patchStep(el.getAttribute("data-und"), { understanding: und });
+      };
+    });
+    document.querySelectorAll("[data-photo]").forEach(function (el) {
+      el.onchange = function () { uploadPhoto(el.getAttribute("data-photo"), el.files && el.files[0]); };
+    });
+    document.querySelectorAll(".mode").forEach(function (b) {
+      b.onclick = function () {
+        state.demoMode[b.getAttribute("data-step")] = b.getAttribute("data-mode");
+        renderSteps();
+      };
+    });
+    document.querySelectorAll("[data-act]").forEach(function (b) {
+      b.onclick = function () { act(b.getAttribute("data-act"), b.getAttribute("data-step"), b); };
+    });
+  }
+
+  function patchStep(id, fields) {
+    var s = state.steps.find(function (x) { return x.id === id; });
+    if (!s) return;
+    if (fields.description !== undefined) s.user_description = fields.description;
+    if (fields.varies_note !== undefined) s.varies_note = fields.varies_note;
+    if (fields.memory_note !== undefined) s.memory_note = fields.memory_note;
+    if (fields.web_allowed !== undefined) s.web_allowed = fields.web_allowed;
+    return api("/api/teach/patch", {
+      name: state.current, step_id: id,
+      description: fields.description, varies_note: fields.varies_note,
+      memory_note: fields.memory_note, web_allowed: fields.web_allowed,
+      understanding: fields.understanding, clear: fields.clear, drop_photo: fields.drop_photo
+    }).then(function (d) { fail(d, "could not save step"); }).catch(function (e) { toast(e.message, "error"); });
+  }
+
+  function uploadPhoto(id, file) {
+    if (!file || !state.current) return;
+    var reader = new FileReader();
+    reader.onload = function () {
+      api("/api/teach/photo", {
+        name: state.current, step_id: id, image: reader.result, filename: file.name
+      }).then(function (d) {
+        fail(d, "could not add screenshot");
+        toast("Screenshot added", "ok");
+        return reloadTeach();
+      }).catch(function (e) { toast(e.message, "error"); });
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function applyWf(d) {
+    if (!d) return;
+    state.context = d.context || "";
+    state.steps = d.steps || [];
+    state.start = d.start_screen || null;
+  }
+
+  function renderStart() {
+    var start = state.start || {};
+    var el = $("startCard");
+    if (!el) return;
+    $("startDesc").value = start.description || $("startDesc").value || "";
+    $("startVaries").value = start.varies_note || $("startVaries").value || "";
+    var src = cropUrl(start.anchor);
+    $("startPreview").innerHTML = src ? ('<div class="crop"><img src="' + esc(src) + '" alt="Starting screen"></div>') : "";
+    var box = $("startLearned");
+    if (start.summary) {
+      box.classList.remove("hide");
+      box.innerHTML = '<div class="k">What I understood</div><p>' + esc(start.summary) + "</p>"
+        + ((start.parameters || []).length ? ("<p>Dynamic: " + esc(start.parameters.join(", ")) + "</p>") : "");
+    } else {
+      box.classList.add("hide");
+      box.innerHTML = "";
+    }
+  }
+
+  function reloadTeach() {
+    return api("/api/teach?name=" + encodeURIComponent(state.current)).then(function (d) {
+      fail(d, "could not load");
+      applyWf(d);
+      showView();
+      renderSteps();
+      refreshTop();
+    });
+  }
+
+  function act(kind, id, btn) {
+    var s = state.steps.find(function (x) { return x.id === id; });
+    var name = state.current;
+    if (!s || !name) return;
+    btn.disabled = true;
+    var done = function () { btn.disabled = false; };
+    var p = Promise.resolve();
+    if (kind === "train") {
+      var answers = [].slice.call(document.querySelectorAll('[data-ans="' + id + '"]'));
+      if (answers.length) {
+        p = answers.reduce(function (seq, a) {
+          return seq.then(function () {
+            if (!a.value.trim()) return;
+            return api("/api/teach/answer", {
+              name: name, step_id: id, question: a.getAttribute("data-q"), answer: a.value.trim()
+            }).then(function (d) { fail(d, "answer failed"); });
+          });
+        }, Promise.resolve()).then(function () {
+          state.pending[id] = [];
+          return api("/api/teach/explain", { name: name, step_id: id }).then(function (e) {
+            fail(e, "explain failed");
+            var q = e.understanding && (e.understanding.clarifying_question || e.understanding.followup_question);
+            if (q) state.pending[id] = [q];
           });
         });
+      } else {
+        p = api("/api/teach/train", { name: name, step_id: id }).then(function (r) {
+          fail(r, "train failed");
+          state.pending[id] = r.questions || [];
+        });
       }
-
-      function loadWorkflows(selectName) {
-        return json("GET", "/api/workflows").then(function (d) {
-          var list = (d.workflows || []).map(function (w) { return w.name; });
-          picker.innerHTML = "";
-          var blank = document.createElement("option");
-          blank.value = "";
-          blank.textContent = list.length ? "Select workflow…" : "No workflows yet";
-          picker.appendChild(blank);
-          list.forEach(function (n) {
-            var o = document.createElement("option");
-            o.value = n;
-            o.textContent = n;
-            picker.appendChild(o);
+    } else if (kind === "showyes" || kind === "showno") {
+      var qtext = btn.getAttribute("data-q") || "";
+      var reply = kind === "showyes" ? "yes" : "no, show me again";
+      p = api("/api/teach/answer", { name: name, step_id: id, question: qtext, answer: reply }).then(function (d) {
+        fail(d, "answer failed");
+        if (kind === "showno") {
+          toast("Show me is on the left. Point at the right control, then click it.");
+          return api("/api/teach/float", { name: name, step_id: id });
+        }
+        return api("/api/teach/explain", { name: name, step_id: id }).then(function (e) {
+          fail(e, "explain failed");
+          var nq = e.understanding && (e.understanding.clarifying_question || e.understanding.followup_question);
+          if (nq) state.pending[id] = [nq];
+        });
+      });
+    } else if (kind === "show") {
+      toast("Show me is on the left of your screen. Switch to the other app, point at the control, then click it.");
+      p = api("/api/teach/float", { name: name, step_id: id }).then(function (d) {
+        fail(d, "could not open Show me");
+        toast("Show me is on the left of your screen. Switch to the app, point at the control, click Show me.", "ok");
+        var n = 0;
+        var timer = setInterval(function () {
+          n += 1;
+          reloadTeach();
+          if (n >= 20) clearInterval(timer);
+        }, 1500);
+      });
+    } else if (kind === "okund") {
+      p = api("/api/teach/approve-understanding", { name: name, step_id: id }).then(function (d) {
+        fail(d, "could not approve understanding");
+        toast("Understanding approved", "ok");
+      });
+    } else if (kind === "rejund") {
+      var c = window.prompt("What did it get wrong?");
+      if (!c) { done(); return; }
+      p = api("/api/teach/reject-understanding", { name: name, step_id: id, correction: c }).then(function (d) {
+        fail(d, "reject failed");
+        state.pending[id] = [];
+        return api("/api/teach/train", { name: name, step_id: id }).then(function (r) {
+          fail(r, "train failed");
+          state.pending[id] = r.questions || [];
+        });
+      });
+    } else if (kind === "demo") {
+      var mode = state.demoMode[id] || "manual";
+      var tEl = document.querySelector('[data-tvals="' + id + '"]');
+      var testValues;
+      if (tEl && tEl.value.trim()) {
+        try { testValues = JSON.parse(tEl.value); }
+        catch (err) { toast("test values must be JSON", "error"); done(); return; }
+      }
+      if (mode === "replay") {
+        p = api("/api/teach/prepare", { name: name, step_id: id, mode: "replay", test_values: testValues }).then(function (prep) {
+          fail(prep, "replay failed");
+          if (prep.ok === false) throw new Error("replay failed at " + (prep.failed_step || "?") + ": " + (prep.reason || ""));
+        });
+      } else if (!window.confirm("Set the screen to where it should be before this step, then click OK when ready.")) {
+        done();
+        return;
+      }
+      p = p.then(function () {
+        return api("/api/teach/demo", { name: name, step_id: id, mode: mode, test_values: testValues }).then(function (demo) {
+          return api("/api/teach/reflect", { name: name, step_id: id }).then(function () {
+            toast(demo.ok ? ("demo ok: " + (demo.reason || "")) : ("demo failed: " + (demo.reason || "")), demo.ok ? "ok" : "error");
           });
-          if (selectName) picker.value = selectName;
-          return list;
         });
-      }
-
-      function loadSteps() {
-        if (!name) {
-          steps = [];
-          renderSteps();
-          return Promise.resolve();
-        }
-        return json("GET", "/api/steps?name=" + encodeURIComponent(name)).then(function (d) {
-          steps = d.steps || [];
-          renderSteps();
-        });
-      }
-
-      function shotUrl(s) {
-        if (!s) return null;
-        if (s.screenshot_url) {
-          var u = s.screenshot_url;
-          if (name && u.indexOf("name=") < 0) {
-            u += (u.indexOf("?") >= 0 ? "&" : "?") + "name=" + encodeURIComponent(name);
-          }
-          return u;
-        }
-        return null;
-      }
-
-      function renderSteps() {
-        stepsEl.innerHTML = "";
-        if (!name) {
-          stepsEl.innerHTML = "<p style='color:var(--muted)'>Choose or create a workflow.</p>";
-          return;
-        }
-        if (!steps.length) {
-          stepsEl.innerHTML = "<p style='color:var(--muted)'>No steps yet. Record a demo or add a reason step.</p>";
-          addInsertButton(-1);
-          return;
-        }
-        steps.forEach(function (s, i) {
-          addInsertButton(i - 1);
-          stepsEl.appendChild(renderCard(s, i));
-        });
-        addInsertButton(steps.length - 1);
-      }
-
-      function addInsertButton(afterIndex) {
-        var row = document.createElement("div");
-        row.className = "add-row";
-        var b = document.createElement("button");
-        b.type = "button";
-        b.textContent = "+ Add step here";
-        b.addEventListener("click", function () { insertReason(afterIndex); });
-        row.appendChild(b);
-        stepsEl.appendChild(row);
-      }
-
-      function renderCard(s, i) {
-        var card = document.createElement("article");
-        card.className = "card" + (s.deleted ? " deleted" : "");
-        card.dataset.index = String(i);
-
-        var thumb = document.createElement("div");
-        var url = shotUrl(s);
-        if (url) {
-          thumb.className = "thumb has-img";
-          var img = document.createElement("img");
-          img.src = url;
-          img.alt = "Step " + (i + 1);
-          thumb.appendChild(img);
-          thumb.addEventListener("click", function () { openLb(url); });
-        } else {
-          thumb.className = "thumb";
-          thumb.textContent = "No screenshot";
-        }
-
-        var body = document.createElement("div");
-        body.className = "body";
-        var row = document.createElement("div");
-        row.className = "row";
-        var num = document.createElement("span");
-        num.className = "num";
-        num.textContent = "Step " + (i + 1);
-        var kindSel = document.createElement("select");
-        ["native", "browser", "reason"].forEach(function (k) {
-          var o = document.createElement("option");
-          o.value = k;
-          o.textContent = k;
-          if ((s.kind || "reason") === k) o.selected = true;
-          kindSel.appendChild(o);
-        });
-        kindSel.className = "kind " + (s.kind || "reason");
-        kindSel.addEventListener("change", function () {
-          kindSel.className = "kind " + kindSel.value;
-          patch(i, { kind: kindSel.value });
-        });
-        row.appendChild(num);
-        row.appendChild(kindSel);
-
-        var dLab = document.createElement("label");
-        dLab.className = "field";
-        dLab.textContent = "Description";
-        var dTa = document.createElement("textarea");
-        dTa.value = s.description || "";
-        dTa.addEventListener("blur", function () { patch(i, { description: dTa.value }); });
-        dLab.appendChild(dTa);
-
-        var iLab = document.createElement("label");
-        iLab.className = "field";
-        iLab.textContent = "Instruction — how should the agent do this step";
-        var iTa = document.createElement("textarea");
-        iTa.value = s.instruction || "";
-        iTa.placeholder = "Plain language for the agent…";
-        iTa.addEventListener("blur", function () { patch(i, { instruction: iTa.value }); });
-        iLab.appendChild(iTa);
-
-        var foot = document.createElement("div");
-        foot.className = "foot";
-        var del = document.createElement("button");
-        del.type = "button";
-        del.className = "danger";
-        del.textContent = s.deleted ? "Undo delete" : "Delete";
-        del.addEventListener("click", function () {
-          patch(i, { deleted: !s.deleted }).then(loadSteps);
-        });
-        foot.appendChild(del);
-
-        body.appendChild(row);
-        body.appendChild(dLab);
-        body.appendChild(iLab);
-        body.appendChild(foot);
-        card.appendChild(thumb);
-        card.appendChild(body);
-        return card;
-      }
-
-      function patch(index, p) {
-        if (!name) return Promise.resolve();
-        return json("POST", "/api/step/update", { name: name, index: index, patch: p })
-          .then(function (d) {
-            if (d.ok === false) throw new Error(d.error || "update failed");
-            if (d.steps) steps = d.steps;
-            return d;
-          })
-          .catch(function (e) { flash(e.message, "error"); });
-      }
-
-      function insertReason(afterIndex) {
-        if (!name) { flash("Pick or create a workflow first", "error"); return; }
-        json("POST", "/api/step/insert", {
-          name: name,
-          after_index: afterIndex,
-          description: "New reason step",
-          kind: "reason"
-        }).then(function (d) {
-          if (d.ok === false) throw new Error(d.error);
-          steps = d.steps || steps;
-          renderSteps();
-        }).catch(function (e) { flash(e.message, "error"); });
-      }
-
-      function collectSteps() {
-        var cards = stepsEl.querySelectorAll(".card");
-        var out = [];
-        cards.forEach(function (card, i) {
-          var base = steps[i] ? Object.assign({}, steps[i]) : {};
-          var kindSel = card.querySelector("select");
-          var areas = card.querySelectorAll("textarea");
-          base.kind = kindSel ? kindSel.value : base.kind;
-          if (areas[0]) base.description = areas[0].value;
-          if (areas[1]) base.instruction = areas[1].value;
-          base.deleted = card.classList.contains("deleted");
-          base.index = i;
-          out.push(base);
-        });
-        return out.length ? out : steps;
-      }
-
-      function openLb(src) {
-        lbImg.src = src;
-        lb.classList.add("show");
-      }
-      lb.addEventListener("click", function () { lb.classList.remove("show"); });
-      document.addEventListener("keydown", function (e) {
-        if (e.key === "Escape") lb.classList.remove("show");
       });
-
-      picker.addEventListener("change", function () {
-        name = picker.value;
-        loadSteps();
+    } else if (kind === "okbeh") {
+      p = api("/api/teach/approve-behaviour", { name: name, step_id: id }).then(function (d) {
+        fail(d, "approve failed");
+        toast("Step approved", "ok");
+        return refreshRail();
       });
-
-      document.getElementById("btn-new").addEventListener("click", function () {
-        var n = window.prompt("New workflow name:");
-        if (!n || !n.trim()) return;
-        json("POST", "/api/workflow/save", { name: n.trim(), steps: [] }).then(function (d) {
-          if (d.ok === false) throw new Error(d.error || "create failed");
-          name = d.name || n.trim();
-          return loadWorkflows(name);
-        }).then(loadSteps).catch(function (e) { flash(e.message, "error"); });
+    } else if (kind === "clear") {
+      p = api("/api/teach/patch", { name: name, step_id: id, clear: [btn.getAttribute("data-key")] }).then(function (d) {
+        fail(d, "could not remove");
+        toast("Removed", "ok");
       });
-
-      document.getElementById("btn-record").addEventListener("click", function () {
-        if (recording) {
-          json("POST", "/api/record/finish", { name: name }).then(function (d) {
-            recording = false;
-            document.getElementById("btn-record").textContent = "Record";
-            flash("Recording finished", "ok");
-            if (d.steps) { steps = d.steps; renderSteps(); }
-            else loadSteps();
-          });
-          return;
-        }
-        if (!name) {
-          var n = window.prompt("Name this recording:");
-          if (!n || !n.trim()) return;
-          name = n.trim();
-        }
-        json("POST", "/api/record/start", { name: name }).then(function (d) {
-          if (d.ok === false) throw new Error(d.error);
-          name = d.name || name;
-          recording = true;
-          document.getElementById("btn-record").textContent = "Finish recording";
-          flash("Recording… press Esc in the recorder, then Finish recording.", "ok");
-          loadWorkflows(name);
-          pollRecord();
-        }).catch(function (e) { flash(e.message, "error"); });
+    } else if (kind === "dropphoto") {
+      p = api("/api/teach/patch", { name: name, step_id: id, drop_photo: btn.getAttribute("data-path") }).then(function (d) {
+        fail(d, "could not remove screenshot");
       });
+    } else if (kind === "witness") {
+      p = api("/api/teach/witness", {
+        name: name, step_id: id, choice: btn.getAttribute("data-choice") || ""
+      }).then(function (d) {
+        fail(d, "could not record choice");
+        toast("Got it", "ok");
+      });
+    } else if (kind === "delstep") {
+      if (!window.confirm("Remove this whole step?")) { done(); return; }
+      p = api("/api/teach/delete-step", { name: name, step_id: id }).then(function (d) {
+        fail(d, "could not remove step");
+        toast("Step removed", "ok");
+        return refreshRail();
+      });
+    }
+    p.then(reloadTeach).catch(function (e) { toast(e.message, "error"); }).then(done);
+  }
 
-      function pollRecord() {
-        if (!recording || !name) return;
-        json("GET", "/api/record/status?name=" + encodeURIComponent(name)).then(function (d) {
-          if (!recording) return;
-          flash("Recording… events " + (d.events_so_far || 0) + " (Esc to stop, then Finish)", "");
-          if (d.running === false) {
-            recording = false;
-            document.getElementById("btn-record").textContent = "Record";
-          } else {
-            setTimeout(pollRecord, 1000);
-          }
-        });
+  function refreshTop() {
+    var n = state.steps.length;
+    var ok = state.steps.filter(function (s) { return s.status === "approved"; }).length;
+    $("wfCounter").textContent = n ? (ok + " of " + n + " verified") : "";
+    $("btnCompile").disabled = !n;
+    $("btnRun").disabled = !(n && ok === n);
+    var w = state.workflows.find(function (x) { return x.name === state.current; });
+    if (w) {
+      w.steps = n;
+      w.approved = ok;
+      w.status = (n && ok === n) ? "ready" : (n || state.context ? "draft" : "idle");
+      renderRail();
+    }
+  }
+
+  function refreshRail() {
+    return api("/api/workflows").then(function (r) {
+      state.workflows = r.workflows || [];
+      renderRail();
+    });
+  }
+
+  function showView() {
+    var hasWf = !!state.current;
+    var teaching = !!state.context || state.steps.length > 0;
+    $("empty").classList.toggle("hide", hasWf);
+    $("composer").classList.toggle("hide", !hasWf || teaching);
+    $("ctxBar").classList.toggle("hide", !teaching);
+    $("startCard").classList.toggle("hide", !teaching);
+    $("addStep").classList.toggle("hide", !teaching);
+    $("steps").classList.toggle("hide", !teaching);
+    if (teaching) $("ctxSummary").textContent = state.context || "No description yet.";
+    if (teaching) renderStart();
+    if (!hasWf) {
+      $("wfTitle").textContent = "No workflow";
+      $("wfCounter").textContent = "";
+    }
+  }
+
+  function openWf(name) {
+    state.current = name;
+    state.pending = {};
+    $("wfTitle").textContent = name;
+    return api("/api/teach?name=" + encodeURIComponent(name)).then(function (d) {
+      fail(d, "could not open");
+      applyWf(d);
+      $("ctxText").value = state.context || "";
+      renderRail();
+      showView();
+      renderSteps();
+      refreshTop();
+      try { history.replaceState(null, "", "?workflow=" + encodeURIComponent(name)); } catch (e) {}
+    }).catch(function (e) { toast(e.message, "error"); });
+  }
+
+  function createWf() {
+    var name = window.prompt("Name this workflow");
+    if (!name || !name.trim()) return;
+    name = name.trim();
+    api("/api/teach/context", { name: name, text: "" }).then(function (d) {
+      fail(d, "could not create");
+      return refreshRail().then(function () { return openWf(name); });
+    }).then(function () {
+      $("composerTitle").textContent = "What are we teaching?";
+      $("ctxText").focus();
+    }).catch(function (e) { toast(e.message, "error"); });
+  }
+
+  $("newWf").onclick = createWf;
+  $("emptyNew").onclick = createWf;
+
+  $("ctxSave").onclick = function () {
+    var t = $("ctxText").value.trim();
+    if (!t) { $("ctxText").focus(); return; }
+    if (!state.current) return;
+    api("/api/teach/context", { name: state.current, text: t }).then(function (d) {
+      fail(d, "could not save");
+      applyWf(d);
+      showView();
+    }).catch(function (e) { toast(e.message, "error"); });
+  };
+  $("ctxText").addEventListener("keydown", function (e) {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) $("ctxSave").click();
+  });
+  document.querySelectorAll(".eg").forEach(function (b) {
+    b.onclick = function () { $("ctxText").value = b.getAttribute("data-eg"); $("ctxText").focus(); };
+  });
+  $("ctxEdit").onclick = function () {
+    $("ctxText").value = state.context;
+    $("composer").classList.remove("hide");
+    $("ctxBar").classList.add("hide");
+    $("startCard").classList.add("hide");
+    $("addStep").classList.add("hide");
+    $("composerTitle").textContent = "Update the description";
+    $("ctxText").focus();
+  };
+
+  $("startShow").onclick = function () {
+    if (!state.current) return;
+    toast("Show me is on the left. Open the starting screen, then click Show me.", "ok");
+    api("/api/teach/float", { name: state.current, step_id: "__start__" }).then(function (d) {
+      fail(d, "could not open Show me");
+      var n = 0;
+      var timer = setInterval(function () {
+        n += 1;
+        reloadTeach();
+        if (n >= 20) clearInterval(timer);
+      }, 1500);
+    }).catch(function (e) { toast(e.message, "error"); });
+  };
+  $("startMark").onclick = function () {
+    if (!state.current) return;
+    api("/api/teach/start-screen", {
+      name: state.current,
+      description: $("startDesc").value,
+      varies_note: $("startVaries").value
+    }).then(function (d) {
+      fail(d, "could not mark start screen");
+      applyWf(d.workflow || d);
+      renderStart();
+      toast("Starting screen marked", "ok");
+    }).catch(function (e) { toast(e.message, "error"); });
+  };
+
+  $("addStep").onclick = function () {
+    if (!state.current) return;
+    api("/api/teach/step", { name: state.current, description: "", varies_note: "" }).then(function (r) {
+      fail(r, "could not add step");
+      applyWf(r.workflow);
+      showView();
+      renderSteps();
+      refreshTop();
+      var last = document.querySelector(".card:last-of-type input");
+      if (last) last.focus();
+    }).catch(function (e) { toast(e.message, "error"); });
+  };
+
+  $("btnCompile").onclick = function () {
+    if (!state.current) return;
+    api("/api/teach/compile", { name: state.current }).then(function (r) {
+      if (r.ok) {
+        var n = (r.plan && r.plan.nodes && r.plan.nodes.length) || state.steps.length;
+        toast("Ready to run — " + n + " steps.", "ok");
+      } else {
+        var v = (r.violations || []).map(function (x) { return "• " + (x.message || x); }).join("\n");
+        toast(r.error || v || "Not ready", "error");
       }
+    }).catch(function (e) { toast(e.message, "error"); });
+  };
 
-      document.getElementById("btn-save").addEventListener("click", function () {
-        if (!name) { flash("No workflow selected", "error"); return; }
-        json("POST", "/api/workflow/save", { name: name, steps: collectSteps() }).then(function (d) {
-          if (d.ok === false) {
-            var msg = d.error || "save failed";
-            if (d.violations && d.violations[0]) msg = d.violations[0].message || msg;
-            throw new Error(msg);
-          }
-          flash("Saved " + (d.steps || 0) + " steps", "ok");
-        }).catch(function (e) { flash(e.message, "error"); });
+  function setRun(cls, txt) {
+    var el = $("runState");
+    el.className = "st " + cls;
+    el.textContent = txt;
+  }
+
+  $("btnRun").onclick = function () {
+    if (!state.current) return;
+    $("drawer").classList.remove("hide");
+    $("runLog").innerHTML = "";
+    $("runPrompt").classList.add("hide");
+    setRun("run", "RUNNING");
+    $("engineState").textContent = "engine running";
+    api("/api/teach/run", { name: state.current, inputs: {} }).then(function (r) {
+      var lines = [];
+      if (r.reason) lines.push(r.reason);
+      (r.results || []).forEach(function (x, i) {
+        lines.push("step " + (i + 1) + "  " + (x.ok ? "ok" : "fail") + "  " + (x.reason || ""));
       });
+      if (!lines.length) lines.push(r.ok ? "finished" : (r.error || "failed"));
+      $("runLog").innerHTML = lines.map(function (l) { return "<div>" + esc(l) + "</div>"; }).join("");
+      setRun(r.ok ? "fin" : "fail", r.ok ? "FINISHED" : "FAILED");
+    }).catch(function (e) {
+      $("runLog").innerHTML = "<div>" + esc(e.message) + "</div>";
+      setRun("fail", "FAILED");
+      toast(e.message, "error");
+    }).then(function () { $("engineState").textContent = "engine idle"; });
+  };
 
-      document.getElementById("btn-run").addEventListener("click", function () {
-        if (!name) { flash("No workflow selected", "error"); return; }
-        json("POST", "/api/workflow/save", { name: name, steps: collectSteps() }).then(function (d) {
-          if (d.ok === false) throw new Error(d.error || "save failed");
-          var body = {
-            name: name,
-            inputs: {},
-            require_approval: document.getElementById("chk-approve").checked
-          };
-          return json("POST", "/api/run", body);
-        }).then(function (d) {
-          if (d.ok === false) throw new Error(d.error || "run failed");
-          runId = d.run_id;
-          flash("Run started", "ok");
-          pollRun();
-        }).catch(function (e) { flash(e.message, "error"); });
-      });
+  $("drawerClose").onclick = function () { $("drawer").classList.add("hide"); };
+  $("promptSend").onclick = function () {
+    var v = $("promptInput").value.trim();
+    if (!v) return;
+    $("promptInput").value = "";
+    $("runPrompt").classList.add("hide");
+  };
+  $("promptInput").addEventListener("keydown", function (e) {
+    if (e.key === "Enter") $("promptSend").click();
+  });
 
-      function pollRun() {
-        if (!runId) return;
-        if (pollTimer) clearTimeout(pollTimer);
-        json("GET", "/api/run/status?run_id=" + encodeURIComponent(runId)).then(function (d) {
-          var prog = document.getElementById("run-progress");
-          var log = document.getElementById("run-log");
-          var wait = document.getElementById("wait-box");
-          var total = d.total || 0;
-          var idx = (d.step_index || 0) + (d.running ? 1 : 0);
-          prog.textContent = d.running
-            ? ("Step " + Math.min((d.step_index || 0) + 1, total) + " / " + total)
-            : (d.error ? ("Stopped: " + d.error) : "Finished");
-          log.textContent = (d.log_tail || []).join("\n") || "(no log)";
-          if (d.awaiting && d.awaiting !== "none") {
-            wait.classList.add("show");
-            document.getElementById("wait-kind").textContent = d.awaiting;
-            document.getElementById("wait-text").textContent = d.prompt_text || "";
-          } else {
-            wait.classList.remove("show");
-          }
-          if (d.running) pollTimer = setTimeout(pollRun, 700);
-        });
-      }
+  function pingEngine() {
+    api("/api/status").then(function (s) {
+      $("engineState").textContent = s.running ? "engine running" : "engine idle";
+    }).catch(function () {});
+  }
 
-      document.getElementById("btn-answer").addEventListener("click", sendAnswer);
-      document.getElementById("wait-input").addEventListener("keydown", function (e) {
-        if (e.key === "Enter") sendAnswer();
-      });
-      function sendAnswer() {
-        var inp = document.getElementById("wait-input");
-        if (!runId) return;
-        json("POST", "/api/run/answer", { run_id: runId, answer: inp.value }).then(function (d) {
-          if (d.ok === false) throw new Error(d.error);
-          inp.value = "";
-          pollRun();
-        }).catch(function (e) { flash(e.message, "error"); });
-      }
-
-      loadWorkflows().then(function () {
-        var q = new URLSearchParams(location.search).get("workflow");
-        if (q) { name = q; picker.value = name; loadSteps(); }
-      });
-    })();
-  </script>
+  api("/api/workflows").then(function (r) {
+    state.workflows = r.workflows || [];
+    renderRail();
+    var q = new URLSearchParams(location.search).get("workflow");
+    if (q) openWf(q);
+    else showView();
+  }).catch(function (e) { toast(e.message, "error"); });
+  pingEngine();
+  setInterval(pingEngine, 4000);
+})();
+</script>
 </body>
 </html>

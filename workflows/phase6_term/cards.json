@@ -1,0 +1,19 @@
+{
+  "steps": [
+    {
+      "index": 0,
+      "kind": "reason",
+      "description": "noop",
+      "instruction": "",
+      "screenshot_url": null,
+      "inputs": [],
+      "outputs": [],
+      "deleted": false,
+      "action": null,
+      "target_name": null,
+      "target_type": null,
+      "window_title": null,
+      "goal": "do nothing harmful"
+    }
+  ]
+}

@@ -45,3 +45,12 @@ email_workflow_automation/*_tiles/
 email_workflow_automation/*.png
 email_workflow_automation/knowledge.yaml
 workflows/_ui_run_probe.txt
+
+workflows/_*
+workflows/gate_*
+workflows/teach_p*
+workflows/acc_*
+workflows/*/teaching.json
+workflows/*/anchors/
+workflows/*/photos/
+{filename}

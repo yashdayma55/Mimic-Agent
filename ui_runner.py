@@ -7,6 +7,7 @@ confirmed an effect. A step that merely does not raise is NOT ok.
 
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass, field
 
@@ -324,31 +325,20 @@ def _click_wrapper(wrapper) -> tuple[bool, tuple[int, int] | None, str]:
         return False, None, "element has empty or off-screen rect"
     xy = _center(rect)
     try:
-        wrapper.click_input()
-        return True, xy, "click_input"
-    except Exception as e:
-        try:
-            import pyautogui
+        import os_input
 
-            pyautogui.click(xy[0], xy[1])
-            return True, xy, f"pyautogui.click after click_input failed ({e})"
-        except Exception as e2:
-            return False, xy, f"click failed: {e2}"
+        os_input.click(xy[0], xy[1])
+        return True, xy, "os_input.click"
+    except Exception as e:
+        return False, xy, f"click failed: {e}"
 
 
 def _type_into_focused(text: str, mode: str) -> tuple[bool, str]:
     try:
-        from pywinauto.keyboard import send_keys
-    except Exception as e:
-        return False, f"keyboard unavailable: {e}"
-    special = set("^+%~(){}[]")
-    escaped = "".join("{" + ch + "}" if ch in special else ch for ch in text)
-    try:
-        if (mode or "").lower() in ("replace", "overwrite"):
-            send_keys("^a")
-            time.sleep(0.05)
-        send_keys(escaped, with_spaces=True)
-        return True, "send_keys"
+        import os_input
+
+        os_input.type_text(text, replace=(mode or "").lower() in ("replace", "overwrite"))
+        return True, "os_input.type_text"
     except Exception as e:
         return False, f"type failed: {e}"
 
@@ -369,16 +359,18 @@ def execute_step(step: dict, last_window: str | None = None) -> StepResult:
 
     wanted = infer_window_title(step, last_window)
     result = StepResult(ok=False, reason="", window_wanted=wanted)
+    invoke_actions = ("launch_app", "open_url", "open_path", "move_file", "copy_file")
 
     win = None
     found_title = None
-    if wanted:
+    if action in invoke_actions:
+        wanted = None
+        result.window_wanted = None
+    elif wanted:
         win, found_title = find_window(wanted)
         result.window_found = found_title
         if win is None:
-            result.reason = (
-                f"target window {wanted!r} not found — is the app open?"
-            )
+            result.reason = f"target window {wanted!r} not found — is the app open?"
             return result
         result.window_focused = focus_window(win)
         tray = wanted.lower() in ("taskbar", "shell_traywnd")
@@ -398,6 +390,16 @@ def execute_step(step: dict, last_window: str | None = None) -> StepResult:
                 f"(foreground={fg!r}) — is the app open?"
             )
             return result
+        try:
+            import os_input
+
+            n = _el_name(focused_wrapper())
+            if n in ("Keep changes", "Don't Save", "Don't save", "Save"):
+                os_input.press("esc")
+                time.sleep(0.25)
+                focus_window(win)
+        except Exception:
+            pass
     else:
         result.lines.append("  no target window inferred; searching desktop")
 
@@ -449,10 +451,7 @@ def execute_step(step: dict, last_window: str | None = None) -> StepResult:
         # A click is verified only if the target app stayed/became foreground
         # or keyboard focus actually moved — never because the element still exists.
         if not fg_ok and not focus_changed:
-            result.reason = (
-                f"click had no observable effect (foreground={after_fg!r}, "
-                f"focused={result.focused_after!r})"
-            )
+            result.reason = "click produced no observable state change"
             return result
         result.ok = True
         result.reason = "click verified (foreground or focus changed)"
@@ -511,5 +510,105 @@ def execute_step(step: dict, last_window: str | None = None) -> StepResult:
         result.window_found = result.window_found or found_title or foreground_title()
         return result
 
+    if action in ("hotkey", "press"):
+        combo = (step.get("keys") or step.get("key") or step.get("text") or "").strip()
+        if not combo:
+            result.reason = "hotkey/press missing keys"
+            return result
+        before_titles = { _title(w) for w in _visible_windows() }
+        try:
+            import os_input
+
+            if action == "press":
+                os_input.press(combo)
+            else:
+                os_input.hotkey(combo)
+        except Exception as e:
+            result.reason = f"hotkey failed: {e}"
+            return result
+        time.sleep(0.4)
+        after_titles = { _title(w) for w in _visible_windows() }
+        expected = (step.get("expect") or "").strip().lower()
+        if expected == "save" or combo.lower() in ("ctrl+s", "^s"):
+            verify_path = step.get("verify_file")
+            needle = step.get("verify_contains") or ""
+            if verify_path:
+                time.sleep(0.5)
+                try:
+                    with open(verify_path, "r", encoding="utf-8") as f:
+                        body = f.read()
+                except Exception:
+                    body = ""
+                if needle and needle.lower() not in body.lower():
+                    result.reason = (
+                        f"save did not persist {needle!r} to {verify_path}"
+                    )
+                    return result
+            result.ok = True
+            result.reason = f"hotkey {combo!r} sent (save; disk check is the ground truth)"
+            result.window_found = found_title or foreground_title()
+            return result
+        new_wins = after_titles - before_titles
+        if new_wins or after_titles != before_titles:
+            result.ok = True
+            result.reason = f"hotkey {combo!r} changed window list {sorted(new_wins)!r}"
+            result.window_found = found_title or foreground_title()
+            return result
+        result.reason = f"hotkey {combo!r} produced no observable state change"
+        return result
+
+    if action in ("launch_app", "open_url", "open_path", "move_file", "copy_file"):
+        try:
+            from invoke_actions import run_invoke
+            extra = {
+                "src": step.get("src") or (step.get("extra") or {}).get("src"),
+                "dst": step.get("dst") or (step.get("extra") or {}).get("dst"),
+            }
+            info = run_invoke(action, str(step.get("value") or step.get("text") or ""), extra)
+        except Exception as e:
+            result.reason = f"invoke failed: {e}"
+            return result
+        if action in ("launch_app", "open_path"):
+            time.sleep(1.0)
+            try:
+                import psutil
+
+                exe = (info.get("exe") or "").lower()
+                names = [(p.info.get("name") or "").lower() for p in psutil.process_iter(["name"])]
+                if exe not in names:
+                    result.reason = f"launch_app: process {exe!r} not in process list"
+                    return result
+            except Exception as e:
+                result.reason = f"launch_app process check failed: {e}"
+                return result
+        if action in ("move_file", "copy_file"):
+            dst = extra.get("dst") or ""
+            if dst and not os.path.exists(dst):
+                result.reason = f"{action}: destination missing {dst}"
+                return result
+        result.ok = True
+        result.reason = f"invoke {action} verified"
+        return result
+
     result.reason = f"unsupported action {action!r} — not executed"
     return result
+
+
+def run_verified_plan(steps: list, *, halt_on_fail: bool = True) -> dict:
+    """Run steps in order. Never retries. Stops on first verified failure."""
+    results = []
+    last_window = None
+    for i, step in enumerate(steps):
+        res = execute_step(step, last_window=last_window)
+        results.append(res)
+        if not res.ok:
+            if halt_on_fail:
+                return {
+                    "ok": False,
+                    "halted_index": i,
+                    "reason": res.reason,
+                    "results": results,
+                }
+        elif res.window_found:
+            last_window = res.window_found
+    return {"ok": True, "halted_index": None, "reason": "done", "results": results}

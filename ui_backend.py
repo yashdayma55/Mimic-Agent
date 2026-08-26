@@ -181,11 +181,27 @@ def list_workflows() -> list:
     out = []
     for n in list_workflow_folders():
         paths = resolve_paths(n)
+        steps_n, approved, status = 0, 0, "idle"
+        try:
+            from teaching import load_taught
+
+            tw = load_taught(n)
+            steps_n = len(tw.steps)
+            approved = sum(1 for s in tw.steps if s.status == "approved")
+            if steps_n and approved == steps_n:
+                status = "ready"
+            elif steps_n or (tw.context or "").strip():
+                status = "draft"
+        except Exception:
+            pass
         out.append({
             "name": n,
             "workflow_dir": paths["workflow_dir"],
             "has_transcript": os.path.isfile(paths["transcript_json"]),
             "has_cards": os.path.isfile(_cards_path(n)),
+            "steps": steps_n,
+            "approved": approved,
+            "status": status,
         })
     return out
 
@@ -429,6 +445,17 @@ def _execute_plan(status: dict, plan: list, inputs: dict, require_approval: bool
         for line in result.log_lines():
             _append_log(status, line)
         if not result.ok:
+            try:
+                from halt_repair import capture_halt_screenshot
+                from workflow_folder import resolve_paths
+
+                status["halt_screenshot"] = capture_halt_screenshot(
+                    resolve_paths(status.get("name") or "")["workflow_dir"],
+                    f"step{i}",
+                )
+                _append_log(status, f"halt screenshot {status['halt_screenshot']}")
+            except Exception as e:
+                _append_log(status, f"halt screenshot skipped ({e})")
             from ui_runner import find_window, needed_app_windows
 
             remaining = filled[i + 1 :]
@@ -508,15 +535,28 @@ def run_status(run_id: str) -> dict:
     if not st:
         return {"ok": False, "error": "unknown run_id", "running": False}
     log = list(st.get("log") or [])
+    running = bool(st.get("running"))
+    error = st.get("error")
+    if running:
+        state = "running"
+    elif error in ("stopped",):
+        state = "stopped"
+    elif error:
+        state = "failed"
+    else:
+        state = "finished"
     return {
         "ok": True,
-        "running": bool(st.get("running")),
+        "running": running,
+        "state": state,
         "step_index": st.get("step_index"),
         "total": st.get("total"),
         "log_tail": log[-40:],
         "awaiting": st.get("awaiting") or "none",
         "prompt_text": st.get("prompt_text") or "",
-        "error": st.get("error"),
+        "error": error,
+        "halt_screenshot": st.get("halt_screenshot"),
+        "outcome": None if running else ("ok" if not error else error),
     }
 
 
@@ -531,3 +571,320 @@ def answer_run(run_id: str, answer: str) -> dict:
 
 def bind_compiled_plan(plan: list, inputs: dict) -> list:
     return bind_inputs(plan, inputs)
+
+
+def workflow_inputs(name: str) -> list:
+    from compile_workflow import live_cards, placeholders_in, step_references
+
+    names = set()
+    for c in live_cards(_load_cards(name)):
+        names |= step_references(c)
+        names |= placeholders_in(c.get("description"))
+        names |= placeholders_in(c.get("instruction"))
+    return sorted(names)
+
+
+def cards_to_plan(name: str) -> dict:
+    from plan_schema import CLOSED_ACTIONS
+    from plan_validator import validate_plan
+
+    nodes = []
+    for c in _load_cards(name):
+        if c.get("deleted"):
+            continue
+        act = ""
+        if isinstance(c.get("action"), dict):
+            act = c["action"].get("action") or ""
+        if act not in CLOSED_ACTIONS:
+            act = "click" if c.get("target_name") else "wait"
+        nodes.append({
+            "id": f"s{c.get('index', len(nodes))}",
+            "action": act,
+            "target_desc": c.get("description") or c.get("instruction"),
+            "target_ref": c.get("target_name"),
+            "elem_name": c.get("target_name"),
+            "elem_type": c.get("target_type"),
+            "window_title": c.get("window_title"),
+            "value": (c.get("action") or {}).get("text") if isinstance(c.get("action"), dict) else None,
+        })
+    plan = {"nodes": nodes, "source": f"workflow:{safe_name(name)}"}
+    return {"ok": True, "plan": plan, "violations": validate_plan(plan)}
+
+
+def validate_plan_payload(plan) -> dict:
+    from plan_validator import validate_plan
+    from os_input import call_count, reset_calls
+
+    before = call_count()
+    viol = validate_plan(plan)
+    assert call_count() == before
+    return {
+        "ok": not viol,
+        "violations": viol,
+        "executed": False,
+        "os_input_calls": call_count() - before,
+    }
+
+
+def propose_plan(text: str, name: str | None = None) -> dict:
+    """Removed: one-shot planning from a single sentence."""
+    return {
+        "ok": False,
+        "error": "one-shot planning removed; teach one step at a time",
+        "plan": None,
+        "violations": [{"code": "removed", "message": "one-shot planning removed"}],
+    }
+
+
+def teach_get(name: str) -> dict:
+    from teaching import load_taught
+
+    wf = load_taught(name)
+    return {"ok": True, **wf.to_dict()}
+
+
+def teach_set_context(name: str, text: str) -> dict:
+    from teach_loop import set_context
+    from teaching import load_taught
+
+    wf = load_taught(name)
+    wf.name = name
+    set_context(wf, text)
+    return {"ok": True, **wf.to_dict()}
+
+
+def teach_update_step(name: str, step_id: str, description=None, varies_note=None,
+                     memory_note=None, web_allowed=None, clear=None,
+                     understanding=None, drop_photo=None) -> dict:
+    from teach_loop import update_step
+    from teaching import TeachingError, load_taught
+
+    wf = load_taught(name)
+    wf.name = name
+    try:
+        step = update_step(
+            wf, step_id, description=description, varies_note=varies_note,
+            memory_note=memory_note, web_allowed=web_allowed, clear=clear,
+            understanding=understanding, drop_photo=drop_photo,
+        )
+    except TeachingError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "step": step.to_dict(), "workflow": wf.to_dict()}
+
+
+def teach_delete_step(name: str, step_id: str) -> dict:
+    from teach_loop import delete_step
+    from teaching import load_taught
+
+    wf = load_taught(name)
+    wf.name = name
+    delete_step(wf, step_id)
+    return {"ok": True, "workflow": wf.to_dict()}
+
+
+def teach_add_photo(name: str, step_id: str, image_b64: str, filename: str = "shot.png") -> dict:
+    import base64
+
+    from teach_loop import attach_photo
+    from teaching import load_taught
+
+    raw = image_b64 or ""
+    if "," in raw:
+        raw = raw.split(",", 1)[1]
+    try:
+        blob = base64.b64decode(raw)
+    except Exception:
+        return {"ok": False, "error": "could not read image"}
+    if len(blob) < 32:
+        return {"ok": False, "error": "empty image"}
+    wf = load_taught(name)
+    wf.name = name
+    return attach_photo(wf, step_id, blob, filename=filename)
+
+
+def teach_observe(name: str, step_id: str, seconds: float = 15) -> dict:
+    from observe import watch_step
+
+    return watch_step(name, step_id, seconds=seconds)
+
+
+def teach_add_step(name: str, description: str, varies_note: str = "") -> dict:
+    from teach_loop import add_step
+    from teaching import load_taught
+
+    wf = load_taught(name)
+    wf.name = name
+    step = add_step(wf, description, varies_note)
+    return {"ok": True, "step": step.to_dict(), "workflow": wf.to_dict()}
+
+
+def teach_start(name: str, step_id: str) -> dict:
+    from teach_loop import start_training
+    from teaching import load_taught
+
+    wf = load_taught(name)
+    qs = start_training(wf, step_id)
+    return {"ok": True, "questions": qs, "workflow": wf.to_dict()}
+
+
+def teach_answer(name: str, step_id: str, question: str, answer: str) -> dict:
+    from teach_loop import answer_chat
+    from teaching import load_taught
+
+    wf = load_taught(name)
+    step = answer_chat(wf, step_id, question, answer)
+    return {"ok": True, "step": step.to_dict()}
+
+
+def teach_show(name: str, step_id: str, point=None, focus: bool = False) -> dict:
+    from teach_loop import answer_show
+    from teaching import load_taught
+
+    wf = load_taught(name)
+    kwargs = {"countdown": 0, "focus": bool(focus)}
+    if point and len(point) == 2:
+        kwargs["point"] = (int(point[0]), int(point[1]))
+    return answer_show(wf, step_id, **kwargs)
+
+
+def teach_arm_show(name: str, step_id: str) -> dict:
+    from float_widget import arm_show
+
+    return arm_show(workflow=name, step_id=step_id, api_url="http://127.0.0.1:8765")
+
+
+def teach_choose_witness(name: str, step_id: str, choice: str) -> dict:
+    from teach_loop import choose_witness
+    from teaching import TeachingError, load_taught
+
+    wf = load_taught(name)
+    try:
+        step = choose_witness(wf, step_id, choice)
+    except TeachingError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "step": step.to_dict()}
+
+
+def teach_explain_start(name: str, description: str = "", varies_note: str = "") -> dict:
+    from teach_loop import explain_start
+    from teaching import load_taught
+
+    wf = load_taught(name)
+    wf.name = name
+    start = explain_start(wf, description=description, varies_note=varies_note)
+    return {"ok": True, "start_screen": start, "workflow": wf.to_dict()}
+
+
+def teach_rehearse(name: str, step_id: str, test_values: dict | None = None) -> dict:
+    from teach_loop import rehearse_step
+    from teaching import load_taught
+
+    wf = load_taught(name)
+    return rehearse_step(wf, step_id, test_values=test_values)
+
+
+def teach_explain(name: str, step_id: str) -> dict:
+    from teach_loop import explain_understanding
+    from teaching import load_taught
+
+    wf = load_taught(name)
+    understanding = explain_understanding(wf, step_id)
+    return {"ok": True, "understanding": understanding}
+
+
+def teach_approve_understanding(name: str, step_id: str) -> dict:
+    from teach_loop import approve_understanding
+    from teaching import TeachingError, load_taught
+
+    wf = load_taught(name)
+    try:
+        step = approve_understanding(wf, step_id)
+    except TeachingError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "step": step.to_dict()}
+
+
+def teach_reject_understanding(name: str, step_id: str, correction: str) -> dict:
+    from teach_loop import reject_understanding
+    from teaching import load_taught
+
+    wf = load_taught(name)
+    step = reject_understanding(wf, step_id, correction)
+    return {"ok": True, "step": step.to_dict()}
+
+
+def teach_prepare(name: str, step_id: str, mode: str, test_values: dict | None = None) -> dict:
+    from teach_loop import prepare_state
+    from teaching import load_taught
+
+    wf = load_taught(name)
+    return prepare_state(wf, step_id, mode, test_values=test_values)
+
+
+def teach_demo(name: str, step_id: str, test_values: dict | None = None, mode: str = "manual") -> dict:
+    from teach_loop import demo_step
+    from teaching import load_taught
+
+    wf = load_taught(name)
+    return demo_step(wf, step_id, test_values=test_values, mode=mode)
+
+
+def teach_reflect(name: str, step_id: str) -> dict:
+    from teach_loop import reflect_on_demo
+    from teaching import load_taught
+
+    wf = load_taught(name)
+    reflection = reflect_on_demo(wf, step_id)
+    return {"ok": True, "reflection": reflection}
+
+
+def teach_approve_behaviour(name: str, step_id: str) -> dict:
+    from teach_loop import approve_behaviour
+    from teaching import TeachingError, load_taught
+
+    wf = load_taught(name)
+    try:
+        step = approve_behaviour(wf, step_id)
+    except TeachingError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "step": step.to_dict()}
+
+
+def teach_approve(name: str, step_id: str, skip_rehearsal: bool = False) -> dict:
+    from teach_loop import approve_step
+    from teaching import load_taught
+
+    wf = load_taught(name)
+    step = approve_step(wf, step_id, skip_rehearsal=skip_rehearsal)
+    return {"ok": True, "step": step.to_dict()}
+
+
+def teach_compile(name: str, inputs: dict | None = None) -> dict:
+    from teach_compile import compile_taught
+    from teaching import TeachingError, load_taught
+
+    wf = load_taught(name)
+    try:
+        return compile_taught(wf, inputs)
+    except TeachingError as e:
+        return {"ok": False, "error": str(e)}
+
+
+def teach_run(name: str, inputs: dict | None = None) -> dict:
+    from teach_compile import run_taught
+    from teaching import load_taught
+
+    wf = load_taught(name)
+    return run_taught(wf, inputs)
+
+
+def apply_repair(name: str, node_id: str, x: int, y: int) -> dict:
+    from halt_repair import apply_repair_click, capture_halt_screenshot
+    from plan_schema import node_from_dict
+    from workflow_folder import resolve_paths
+
+    paths = resolve_paths(name)
+    shot = capture_halt_screenshot(paths["workflow_dir"], str(node_id))
+    node = node_from_dict({"id": str(node_id), "action": "click"})
+    repaired = apply_repair_click(node, shot, int(x), int(y), paths["workflow_dir"])
+    return {"ok": True, "node": repaired.to_dict(), "screenshot": shot}

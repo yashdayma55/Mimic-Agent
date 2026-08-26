@@ -146,6 +146,30 @@ class ReviewHandler(BaseHTTPRequestHandler):
                     self._send(status, body, ctype)
                 return
 
+        if path == "/api/teach":
+            qs = parse_qs(parsed.query or "")
+            name = (qs.get("name") or [None])[0]
+            if not name:
+                status, body, ctype = _json_bytes({"ok": False, "error": "missing name"}, status=400)
+                self._send(status, body, ctype)
+                return
+            status, body, ctype = _json_bytes(ui_backend.teach_get(name))
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/inputs":
+            qs = parse_qs(parsed.query or "")
+            name = (qs.get("name") or [None])[0]
+            if not name:
+                status, body, ctype = _json_bytes({"ok": False, "error": "missing name"}, status=400)
+                self._send(status, body, ctype)
+                return
+            status, body, ctype = _json_bytes({
+                "ok": True, "name": name, "inputs": ui_backend.workflow_inputs(name),
+            })
+            self._send(status, body, ctype)
+            return
+
         if path == "/api/run/status":
             try:
                 run_id = (parse_qs(parsed.query or "").get("run_id") or [None])[0]
@@ -291,6 +315,268 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 self._send(status, body, ctype)
             return
 
+        if path == "/api/plan/validate":
+            data = self._read_json()
+            status, body, ctype = _json_bytes(ui_backend.validate_plan_payload(data.get("plan") or data))
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/plan/propose":
+            status, body, ctype = _json_bytes(
+                {
+                    "ok": False,
+                    "error": "one-shot planning removed; teach one step at a time",
+                },
+                status=410,
+            )
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/context":
+            data = self._read_json()
+            status, body, ctype = _json_bytes(
+                ui_backend.teach_set_context(data.get("name"), data.get("text") or "")
+            )
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/step":
+            data = self._read_json()
+            status, body, ctype = _json_bytes(
+                ui_backend.teach_add_step(
+                    data.get("name"), data.get("description") or "", data.get("varies_note") or "",
+                )
+            )
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/patch":
+            data = self._read_json()
+            status, body, ctype = _json_bytes(
+                ui_backend.teach_update_step(
+                    data.get("name"), data.get("step_id"),
+                    description=data.get("description"),
+                    varies_note=data.get("varies_note"),
+                    memory_note=data.get("memory_note"),
+                    web_allowed=data.get("web_allowed"),
+                    clear=data.get("clear"),
+                    understanding=data.get("understanding"),
+                    drop_photo=data.get("drop_photo"),
+                )
+            )
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/photo":
+            data = self._read_json()
+            status, body, ctype = _json_bytes(
+                ui_backend.teach_add_photo(
+                    data.get("name"), data.get("step_id"),
+                    data.get("image") or "", data.get("filename") or "shot.png",
+                )
+            )
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/delete-step":
+            data = self._read_json()
+            status, body, ctype = _json_bytes(
+                ui_backend.teach_delete_step(data.get("name"), data.get("step_id"))
+            )
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/observe":
+            data = self._read_json()
+            status, body, ctype = _json_bytes(
+                ui_backend.teach_observe(
+                    data.get("name"), data.get("step_id"),
+                    seconds=float(data.get("seconds") or 15),
+                )
+            )
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/train":
+            data = self._read_json()
+            status, body, ctype = _json_bytes(
+                ui_backend.teach_start(data.get("name"), data.get("step_id"))
+            )
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/answer":
+            data = self._read_json()
+            status, body, ctype = _json_bytes(
+                ui_backend.teach_answer(
+                    data.get("name"), data.get("step_id"),
+                    data.get("question") or "", data.get("answer") or "",
+                )
+            )
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/show":
+            data = self._read_json()
+            status, body, ctype = _json_bytes(
+                ui_backend.teach_show(
+                    data.get("name"), data.get("step_id"),
+                    point=data.get("point"), focus=bool(data.get("focus")),
+                )
+            )
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/start-screen":
+            data = self._read_json()
+            status, body, ctype = _json_bytes(
+                ui_backend.teach_explain_start(
+                    data.get("name"),
+                    data.get("description") or "",
+                    data.get("varies_note") or "",
+                )
+            )
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/witness":
+            data = self._read_json()
+            status, body, ctype = _json_bytes(
+                ui_backend.teach_choose_witness(
+                    data.get("name"), data.get("step_id"), data.get("choice") or "",
+                )
+            )
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/float":
+            data = self._read_json()
+            status, body, ctype = _json_bytes(
+                ui_backend.teach_arm_show(data.get("name"), data.get("step_id"))
+            )
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/rehearse":
+            data = self._read_json()
+            status, body, ctype = _json_bytes(
+                ui_backend.teach_rehearse(
+                    data.get("name"), data.get("step_id"), data.get("test_values"),
+                )
+            )
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/explain":
+            data = self._read_json()
+            status, body, ctype = _json_bytes(
+                ui_backend.teach_explain(data.get("name"), data.get("step_id"))
+            )
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/approve-understanding":
+            data = self._read_json()
+            status, body, ctype = _json_bytes(
+                ui_backend.teach_approve_understanding(data.get("name"), data.get("step_id"))
+            )
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/reject-understanding":
+            data = self._read_json()
+            status, body, ctype = _json_bytes(
+                ui_backend.teach_reject_understanding(
+                    data.get("name"), data.get("step_id"), data.get("correction") or "",
+                )
+            )
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/prepare":
+            data = self._read_json()
+            status, body, ctype = _json_bytes(
+                ui_backend.teach_prepare(
+                    data.get("name"), data.get("step_id"),
+                    data.get("mode") or "manual", data.get("test_values"),
+                )
+            )
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/demo":
+            data = self._read_json()
+            status, body, ctype = _json_bytes(
+                ui_backend.teach_demo(
+                    data.get("name"), data.get("step_id"),
+                    data.get("test_values"), data.get("mode") or "manual",
+                )
+            )
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/reflect":
+            data = self._read_json()
+            status, body, ctype = _json_bytes(
+                ui_backend.teach_reflect(data.get("name"), data.get("step_id"))
+            )
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/approve-behaviour":
+            data = self._read_json()
+            try:
+                result = ui_backend.teach_approve_behaviour(data.get("name"), data.get("step_id"))
+            except Exception as e:
+                result = {"ok": False, "error": str(e)}
+            st = 400 if not result.get("ok") else 200
+            status, body, ctype = _json_bytes(result, status=st)
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/approve":
+            data = self._read_json()
+            status, body, ctype = _json_bytes(
+                ui_backend.teach_approve(
+                    data.get("name"), data.get("step_id"),
+                    bool(data.get("skip_rehearsal")),
+                )
+            )
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/compile":
+            data = self._read_json()
+            try:
+                result = ui_backend.teach_compile(data.get("name"), data.get("inputs"))
+            except Exception as e:
+                result = {"ok": False, "error": str(e)}
+            st = 400 if not result.get("ok") else 200
+            status, body, ctype = _json_bytes(result, status=st)
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/run":
+            data = self._read_json()
+            try:
+                status, body, ctype = _json_bytes(
+                    ui_backend.teach_run(data.get("name"), data.get("inputs"))
+                )
+            except Exception as e:
+                status, body, ctype = _json_bytes({"ok": False, "error": str(e)}, status=400)
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/repair/click":
+            data = self._read_json()
+            status, body, ctype = _json_bytes(
+                ui_backend.apply_repair(
+                    data.get("name"), data.get("node_id"), data.get("x"), data.get("y"),
+                )
+            )
+            self._send(status, body, ctype)
+            return
+
         if path == "/api/run/answer":
             try:
                 data = self._read_json()
@@ -314,8 +600,22 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 data = {}
             self._posted_json = data
             # New UI cycle: body includes `name` -> ui_backend thread runner
+            if isinstance(data, dict) and data.get("plan") and not data.get("name"):
+                gate = ui_backend.validate_plan_payload(data.get("plan"))
+                if not gate.get("ok"):
+                    gate["executed"] = False
+                    status, body, ctype = _json_bytes(gate, status=400)
+                    self._send(status, body, ctype)
+                    return
             if isinstance(data, dict) and data.get("name"):
                 try:
+                    if data.get("plan"):
+                        gate = ui_backend.validate_plan_payload(data.get("plan"))
+                        if not gate.get("ok"):
+                            gate["executed"] = False
+                            status, body, ctype = _json_bytes(gate, status=400)
+                            self._send(status, body, ctype)
+                            return
                     result = ui_backend.run_workflow(
                         data.get("name"),
                         inputs=data.get("inputs") or {},
@@ -461,21 +761,35 @@ class ReviewHandler(BaseHTTPRequestHandler):
         self._send(200, html.encode("utf-8"), "text/html; charset=utf-8")
 
     def _serve_screenshot(self, name, query=""):
+        qs = parse_qs(query or "")
+        wf = (qs.get("name") or [None])[0] or self._workflow_name()
+        rel = (qs.get("rel") or [None])[0]
         name = os.path.basename(unquote(name or "").split("?")[0])
-        if not name or name in (".", ".."):
+        if not rel and (not name or name in (".", "..")):
             status, body, ctype = _json_bytes(
                 {"ok": False, "error": "bad name"}, status=400
             )
             self._send(status, body, ctype)
             return
-        qs = parse_qs(query or "")
-        wf = (qs.get("name") or [None])[0] or self._workflow_name()
-        if wf:
-            from workflow_folder import resolve_paths
-            cap_dir = resolve_paths(wf)["captures_dir"]
+        if rel and wf:
+            from workflow_folder import workflow_dir
+
+            root = os.path.abspath(workflow_dir(wf))
+            full = os.path.abspath(os.path.join(root, rel.replace("\\", "/")))
+            if not (full == root or full.startswith(root + os.sep)):
+                status, body, ctype = _json_bytes(
+                    {"ok": False, "error": "bad path"}, status=400
+                )
+                self._send(status, body, ctype)
+                return
+            path = full
         else:
-            cap_dir = self._captures_dir()
-        path = os.path.join(cap_dir, name)
+            if wf:
+                from workflow_folder import resolve_paths
+                cap_dir = resolve_paths(wf)["captures_dir"]
+            else:
+                cap_dir = self._captures_dir()
+            path = os.path.join(cap_dir, name)
         if not os.path.isfile(path):
             status, body, ctype = _json_bytes(
                 {"ok": False, "error": "screenshot not found"}, status=404
