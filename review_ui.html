@@ -294,15 +294,40 @@
       display: grid; grid-template-columns: 72px 1fr auto; gap: 10px; align-items: start;
       border: 1px solid var(--rule); border-radius: var(--r); padding: 10px; background: var(--paper);
     }
+    .case-row.described-only { border-style: dashed; background: #FDFAF5; }
     .case-thumb { width: 72px; height: 54px; border-radius: 6px; object-fit: cover; border: 1px solid var(--rule); background: var(--surface); }
     .case-thumb.empty { display: block; }
     .case-body { min-width: 0; }
-    .case-label { font-size: 13px; font-weight: 500; margin: 0 0 4px; }
+    .case-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 4px; }
+    .case-label { font-size: 13px; font-weight: 500; margin: 0; }
+    .case-origin-badge {
+      font-family: "IBM Plex Mono", monospace; font-size: 10px; letter-spacing: .06em;
+      text-transform: uppercase; padding: 2px 7px; border-radius: 20px; white-space: nowrap;
+      border: 1px solid var(--rule); color: var(--ink-2); background: var(--surface);
+    }
+    .case-origin-badge.halt { border-color: var(--attention); color: var(--attention); background: var(--attention-bg); }
+    .case-origin-badge.captured { border-color: var(--verified); color: var(--verified); background: var(--verified-bg); }
+    .case-origin-badge.described { border-color: var(--ink-3); color: var(--ink-2); }
+    .case-reliability {
+      font-size: 11.5px; color: var(--attention); background: var(--attention-bg);
+      border: 1px solid var(--attention); border-radius: 6px; padding: 5px 8px; margin: 0 0 6px;
+    }
     .case-mono { font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--ink-3); margin: 0 0 4px; word-break: break-word; }
     .case-success { font-size: 12px; color: var(--ink-2); margin: 0 0 4px; }
     .case-stats { font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--ink-3); margin: 0; }
     .case-stats.warn { color: var(--attention); }
     .case-actions { display: flex; flex-direction: column; gap: 6px; }
+    .case-add { margin-top: 4px; padding-top: 10px; border-top: 1px dashed var(--rule); }
+    .case-add-chooser { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+    .case-auth-banner {
+      border: 1px solid var(--attention); border-radius: 8px; padding: 10px 12px;
+      margin-bottom: 10px; background: rgba(200, 120, 0, 0.06);
+    }
+    .case-auth-banner .hint { margin: 0 0 8px; }
+    .case-countdown {
+      font-family: "IBM Plex Mono", monospace; font-size: 28px; font-weight: 600;
+      color: var(--attention); margin: 8px 0;
+    }
 
     .addstep {
       width: 100%; border: 1px dashed var(--rule); background: none; border-radius: 8px;
@@ -525,6 +550,7 @@
       if (el && el.name) parts.push("a11y:" + el.name + (el.control_type ? "/" + el.control_type : ""));
     });
     if (tr.browser_url) parts.push("url:" + tr.browser_url);
+    if (tr.description) parts.push("desc:" + tr.description);
     if (tr.halt_signature) parts.push("vision-only");
     return parts.length ? parts.join(" · ") : "—";
   }
@@ -546,6 +572,12 @@
     if (check.expected) return String(check.expected);
     if (check.type) return String(check.type);
     return "—";
+  }
+  function caseOriginBadge(c) {
+    var from = (c && c.created_from) || "halt";
+    if (from === "user_captured") return { text: "you captured this", cls: "captured" };
+    if (from === "user_described") return { text: "you described this", cls: "described" };
+    return { text: "from a halt", cls: "halt" };
   }
 
   function renderRail() {
@@ -917,21 +949,53 @@
         + "</div></div>";
     }
     var caseList = s.cases || [];
-    if (caseList.length) {
+    var caseAuth = s.case_authoring || null;
+    var haltOpen = s.case_halt && !s.case_halt.resolution;
+    var canAddCase = caseList.length < 3 && !caseAuth && !haltOpen;
+    if (caseList.length || caseAuth || canAddCase) {
       h += '<div class="card-sec">' + secHdr("Cases", s.id, "cases") + '<div class="sec-b case-list">';
+      if (caseAuth) {
+        var authMsg = "";
+        if (caseAuth.mode === "capture" && caseAuth.phase === "awaiting_capture") {
+          authMsg = "Set your screen to the situation you want me to recognise — capturing in a moment.";
+        } else if (caseAuth.mode === "describe") {
+          authMsg = "Describe the situation in a sentence. I'll only be able to recognise it by looking, so this is less reliable than capturing it.";
+        }
+        if (caseAuth.phase === "needs_resolution") {
+          authMsg = "Teach the resolution with Show me or Watch me below — I'll derive success from what changes.";
+        }
+        h += '<div class="case-auth-banner">'
+          + '<p class="hint" style="color:var(--attention)"><b>Adding a case</b>'
+          + (caseAuth.mode === "describe" ? " (describe)" : caseAuth.mode === "capture" ? " (capture)" : "")
+          + "</p>";
+        if (authMsg) h += '<p class="hint">' + esc(authMsg) + "</p>";
+        if (caseAuth.phase === "awaiting_capture") {
+          h += '<p class="case-countdown" data-casecd="' + s.id + '">3</p>';
+        }
+        if (caseAuth.trigger && caseAuth.trigger.description) {
+          h += '<p class="case-mono">"' + esc(caseAuth.trigger.description) + '"</p>';
+        }
+        h += '<button type="button" class="xbtn" data-act="caseauthcancel" data-step="' + s.id + '">cancel</button>'
+          + "</div>";
+      }
       caseList.forEach(function (c) {
         var frame = (c.evidence && c.evidence.frame) || "";
         var thumb = caseFrameUrl(frame);
         var stats = caseStatsText(c);
         var never = !(c.times_matched || 0);
-        h += '<div class="case-row">'
+        var ob = caseOriginBadge(c);
+        h += '<div class="case-row' + (c.created_from === "user_described" ? " described-only" : "") + '">'
           + (thumb
             ? '<img class="case-thumb" src="' + esc(thumb) + '" alt="">'
             : '<span class="case-thumb empty"></span>')
           + '<div class="case-body">'
-          + '<p class="case-label">' + esc(caseLabel(c)) + "</p>"
+          + '<div class="case-head"><p class="case-label">' + esc(caseLabel(c)) + "</p>"
+          + '<span class="case-origin-badge ' + ob.cls + '">' + esc(ob.text) + "</span></div>"
           + '<p class="case-mono">' + esc(caseTriggerMono(c.trigger)) + "</p>"
           + '<p class="case-success">Success: ' + esc(caseSuccessText(c)) + "</p>";
+        if (c.created_from === "user_described") {
+          h += '<p class="case-reliability">recognised by description only — less reliable</p>';
+        }
         if (c.halted_at_step) {
           var seenIdx = (state.steps || []).findIndex(function (x) { return x.id === c.halted_at_step; });
           if (seenIdx >= 0) {
@@ -945,6 +1009,19 @@
           + '<button type="button" class="xbtn" data-act="delcase" data-step="' + s.id + '" data-case="' + esc(c.id) + '">remove</button>'
           + "</div></div>";
       });
+      if (canAddCase) {
+        h += '<div class="case-add">'
+          + '<button type="button" class="btn" data-act="caseadd" data-step="' + s.id + '">Add a case</button>'
+          + '<div class="case-add-chooser" data-casechooser="' + s.id + '" hidden>'
+          + '<button type="button" class="btn primary" data-act="casecap" data-step="' + s.id + '">Capture it</button>'
+          + '<button type="button" class="btn" data-act="casedescopen" data-step="' + s.id + '">Describe it</button>'
+          + "</div>"
+          + '<div data-casedescform="' + s.id + '" hidden style="margin-top:8px">'
+          + '<div class="field"><label>Situation (one sentence)</label>'
+          + '<input data-casedesc="' + s.id + '" placeholder="A sign-in panel blocks the email list"></div>'
+          + '<button type="button" class="btn primary" data-act="casedescsubmit" data-step="' + s.id + '">Save description</button>'
+          + "</div></div>";
+      }
       h += "</div></div>";
     }
     if (s.status === "understood" || s.status === "demonstrated" || s.status === "approved") {
@@ -1008,9 +1085,31 @@
     return h;
   }
 
+  function runCaseCaptureCountdown(stepId) {
+    var el = document.querySelector('[data-casecd="' + stepId + '"]');
+    if (!el) return Promise.resolve();
+    var left = 3;
+    el.textContent = String(left);
+    return new Promise(function (resolve) {
+      var timer = setInterval(function () {
+        left -= 1;
+        if (left > 0) {
+          el.textContent = String(left);
+          return;
+        }
+        clearInterval(timer);
+        el.textContent = "…";
+        resolve();
+      }, 1000);
+    });
+  }
+
   function pollCaptureResult(id, sinceAt) {
     var tries = 0;
     var maxTries = 60;
+    var st0 = (state.steps || []).find(function (x) { return x.id === id; });
+    var hadAuth = !!(st0 && st0.case_authoring);
+    var prevCases = st0 && st0.cases ? st0.cases.length : 0;
     return new Promise(function (resolve) {
       var timer = setInterval(function () {
         tries += 1;
@@ -1024,6 +1123,9 @@
           renderSteps();
           refreshTop();
           toast(st.last_capture.message || st.last_capture.outcome, st.last_capture.outcome === "saved" ? "ok" : "");
+          if (hadAuth && !st.case_authoring && (st.cases || []).length > prevCases) {
+            toast("Case saved", "ok");
+          }
           resolve(st.last_capture);
         });
         if (tries >= maxTries) {
@@ -1240,6 +1342,9 @@
       toast("Watching for " + secs + "s — show me what this step does.", "ok");
       p = api("/api/teach/capture", { name: name, step_id: id, mode: "watch", seconds: secs }).then(function (d) {
         fail(d, "watch failed");
+        if (d.case_authoring_complete && d.case_authoring_complete.case) {
+          toast("Case saved — " + (d.case_authoring_complete.case.id || ""), "ok");
+        }
         var msg = (d.last_capture && d.last_capture.message) || (d.learned && d.learned.summary) || d.outcome || "done";
         toast(msg.slice(0, 120), d.outcome === "saved" ? "ok" : "");
       });
@@ -1360,6 +1465,43 @@
       p = api("/api/teach/remove-case", { name: name, step_id: id, case_id: caseId }).then(function (d) {
         fail(d, "could not remove case");
         toast("Case removed", "ok");
+      });
+    } else if (kind === "caseadd") {
+      var chooser = document.querySelector('[data-casechooser="' + id + '"]');
+      if (chooser) chooser.hidden = false;
+      done();
+      return;
+    } else if (kind === "casecap") {
+      p = api("/api/teach/case-capture-start", { name: name, step_id: id }).then(function (d) {
+        fail(d, "could not start capture");
+        return reloadTeach().then(function () {
+          return runCaseCaptureCountdown(id);
+        }).then(function () {
+          return api("/api/teach/case-capture-frame", { name: name, step_id: id });
+        }).then(function (cap) {
+          fail(cap, "capture failed");
+          toast(cap.message || "Screen captured — teach the resolution", "ok");
+        });
+      });
+    } else if (kind === "casedescopen") {
+      var form = document.querySelector('[data-casedescform="' + id + '"]');
+      var chooser2 = document.querySelector('[data-casechooser="' + id + '"]');
+      if (chooser2) chooser2.hidden = true;
+      if (form) form.hidden = false;
+      done();
+      return;
+    } else if (kind === "casedescsubmit") {
+      var descEl = document.querySelector('[data-casedesc="' + id + '"]');
+      var descTxt = descEl ? descEl.value.trim() : "";
+      if (!descTxt) { toast("Describe the situation in a sentence", "error"); done(); return; }
+      p = api("/api/teach/case-describe", { name: name, step_id: id, description: descTxt }).then(function (d) {
+        fail(d, "could not save description");
+        toast(d.reliability_warning || "Description saved — teach the resolution", "ok");
+      });
+    } else if (kind === "caseauthcancel") {
+      p = api("/api/teach/case-authoring-cancel", { name: name, step_id: id }).then(function (d) {
+        fail(d, "could not cancel");
+        toast(d.cancelled ? "Case authoring cancelled" : "Done", "ok");
       });
     }
     p.then(reloadTeach).catch(function (e) { toast(e.message, "error"); }).then(done);

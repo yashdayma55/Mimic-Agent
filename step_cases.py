@@ -60,6 +60,17 @@ def default_origin_note(created_from: str, *, at: datetime | None = None) -> str
     return "you added this"
 
 
+def case_origin_badge(created_from: str) -> str:
+    origin = (created_from or "").strip()
+    if origin == CASE_ORIGIN_HALT:
+        return "from a halt"
+    if origin == CASE_ORIGIN_USER_CAPTURED:
+        return "you captured this"
+    if origin == CASE_ORIGIN_USER_DESCRIBED:
+        return "you described this"
+    return "case"
+
+
 def _validate_origin(created_from: str) -> str:
     origin = (created_from or "").strip()
     if origin not in CASE_ORIGINS:
@@ -277,8 +288,15 @@ def case_row_display(case: StepCase) -> dict:
         "never_matched": int(case.times_matched or 0) <= 0,
         "frame": (case.evidence or {}).get("frame"),
         "created_from": case.created_from,
+        "origin_badge": case_origin_badge(case.created_from),
         "origin_note": case.origin_note or default_origin_note(case.created_from),
         "halted_at_step": case.halted_at_step,
+        "description_only": case.created_from == CASE_ORIGIN_USER_DESCRIBED,
+        "reliability_warning": (
+            "recognised by description only — less reliable"
+            if case.created_from == CASE_ORIGIN_USER_DESCRIBED
+            else None
+        ),
     }
 
 

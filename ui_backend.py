@@ -736,9 +736,14 @@ def teach_add_photo(name: str, step_id: str, image_b64: str, filename: str = "sh
 
 def teach_observe(name: str, step_id: str, seconds: float = 15) -> dict:
     from observe import watch_step
+    from teach_loop import _record_watch_capture
     from teaching import get_step, load_taught
 
     out = watch_step(name, step_id, seconds=seconds)
+    if step_id not in ("__start__", "start", "start_screen"):
+        wf = load_taught(name)
+        wf.name = name
+        out = _record_watch_capture(wf, step_id, out)
     try:
         st = get_step(load_taught(name), step_id)
         out["step"] = st.to_dict()
@@ -951,6 +956,68 @@ def teach_case_attach(name: str, halting_step_id: str, answer: str, target_step_
     except TeachingError as e:
         return {"ok": False, "error": str(e)}
     return {"ok": True, **out}
+
+
+def teach_case_capture_start(name: str, step_id: str) -> dict:
+    from case_authoring import start_user_case_capture
+    from teaching import TeachingError, load_taught
+
+    wf = load_taught(name)
+    try:
+        out = start_user_case_capture(wf, step_id)
+    except TeachingError as e:
+        return {"ok": False, "error": str(e)}
+    return out
+
+
+def teach_case_capture_frame(
+    name: str,
+    step_id: str,
+    structural: dict | None = None,
+    synthetic_b64: str | None = None,
+) -> dict:
+    import base64
+
+    from case_authoring import capture_user_case_frame
+    from teaching import TeachingError, load_taught
+
+    wf = load_taught(name)
+    synthetic_bytes = None
+    if synthetic_b64:
+        raw = synthetic_b64
+        if "," in raw:
+            raw = raw.split(",", 1)[1]
+        try:
+            synthetic_bytes = base64.b64decode(raw)
+        except Exception:
+            return {"ok": False, "error": "could not read image"}
+    try:
+        out = capture_user_case_frame(
+            wf, step_id, structural=structural, synthetic_bytes=synthetic_bytes,
+        )
+    except TeachingError as e:
+        return {"ok": False, "error": str(e)}
+    return out
+
+
+def teach_case_describe(name: str, step_id: str, description: str) -> dict:
+    from case_authoring import start_user_case_describe
+    from teaching import TeachingError, load_taught
+
+    wf = load_taught(name)
+    try:
+        out = start_user_case_describe(wf, step_id, description)
+    except TeachingError as e:
+        return {"ok": False, "error": str(e)}
+    return out
+
+
+def teach_case_authoring_cancel(name: str, step_id: str) -> dict:
+    from case_authoring import cancel_user_case_authoring
+    from teaching import load_taught
+
+    wf = load_taught(name)
+    return cancel_user_case_authoring(wf, step_id)
 
 
 def teach_reflect(name: str, step_id: str) -> dict:

@@ -6,7 +6,15 @@ import os
 from typing import Any, Callable
 
 from step_cases import get_step_case, list_step_cases, record_case_match
-from teaching import StepCase, TaughtStep, TaughtWorkflow, TeachingError
+from teaching import (
+    CASE_ORIGIN_HALT,
+    CASE_ORIGIN_USER_CAPTURED,
+    CASE_ORIGIN_USER_DESCRIBED,
+    StepCase,
+    TaughtStep,
+    TaughtWorkflow,
+    TeachingError,
+)
 
 VisionFn = Callable[[bytes, str], dict]
 
@@ -42,6 +50,34 @@ def has_structural_trigger(trigger: dict | None) -> bool:
     if (tr.get("browser_url") or "").strip():
         return True
     return False
+
+
+def _origin_label(case: StepCase) -> str:
+    return (case.created_from or CASE_ORIGIN_HALT).strip()
+
+
+def _origin_has_evidence(case: StepCase) -> bool:
+    return _origin_label(case) in (CASE_ORIGIN_HALT, CASE_ORIGIN_USER_CAPTURED)
+
+
+def _format_match_log(case: StepCase, match: dict) -> str:
+    origin = _origin_label(case)
+    tier = match.get("tier")
+    reason = (match.get("reason") or "").strip()
+    if tier == 2:
+        detail = f"vision, confidence {match.get('confidence')}"
+    elif tier == "described":
+        detail = reason or "description match"
+    else:
+        detail = reason or "structural trigger"
+    tier_label = f"Tier {tier}" if tier != "described" else "description"
+    return f"case {case.id} matched ({origin} · {tier_label}: {detail})"
+
+
+def _attach_log(case: StepCase, match: dict) -> dict:
+    out = dict(match)
+    out["log"] = _format_match_log(case, out)
+    return out
 
 
 def _case_description(case: StepCase) -> str:
@@ -85,14 +121,13 @@ def _tier1_case_match(case: StepCase, structural: dict) -> dict | None:
     if expected_url:
         parts.append(f"URL {expected_url!r}")
     reason = ", ".join(parts) or "structural trigger"
-    return {
+    return _attach_log(case, {
         "case_id": case.id,
         "case": case,
         "tier": 1,
         "confidence": "high",
         "reason": reason,
-        "log": f"case {case.id} matched (Tier 1: {reason})",
-    }
+    })
 
 
 def _read_case_frame(wf_name: str, case: StepCase) -> bytes | None:
@@ -149,14 +184,63 @@ def _tier2_case_match(
     conf = (vis.get("confidence") or "low").strip().lower()
     if conf not in ("high", "medium", "low"):
         conf = "low"
-    return {
+    return _attach_log(case, {
         "case_id": case.id,
         "case": case,
         "tier": 2,
         "confidence": conf,
         "reason": f"vision match for {description!r}",
-        "log": f"case {case.id} matched (Tier 2: vision, confidence {conf})",
-    }
+    })
+
+
+def _described_case_match(
+    case: StepCase,
+    live_screen: bytes | None,
+    vision_fn: VisionFn | None,
+) -> dict | None:
+    if _origin_label(case) != CASE_ORIGIN_USER_DESCRIBED:
+        return None
+    description = ((case.trigger or {}).get("description") or "").strip()
+    if not description:
+        return None
+    if vision_fn is None or not live_screen:
+        return None
+    vis = vision_fn(live_screen, description)
+    if not vis.get("matches"):
+        return None
+    conf = (vis.get("confidence") or "low").strip().lower()
+    if conf not in ("high", "medium", "low"):
+        conf = "low"
+    return _attach_log(case, {
+        "case_id": case.id,
+        "case": case,
+        "tier": "described",
+        "confidence": conf,
+        "reason": f"description {description!r}",
+    })
+
+
+def _capture_live_screen(wf_name: str) -> bytes | None:
+    try:
+        from anchor_repair import capture_halt_screenshot
+        from workflow_folder import workflow_dir
+
+        tmp = capture_halt_screenshot(workflow_dir(wf_name), "_case_match")
+        with open(tmp, "rb") as f:
+            return f.read()
+    except Exception:
+        return None
+
+
+def _choose_high_match(high: list[dict]) -> dict | None:
+    if not high:
+        return None
+    if len(high) == 1:
+        return high[0]
+    evidenced = [c for c in high if _origin_has_evidence(c["case"])]
+    if len(evidenced) == 1:
+        return evidenced[0]
+    return None
 
 
 def evaluate_case_match(
@@ -165,8 +249,12 @@ def evaluate_case_match(
     wf_name: str,
     *,
     vision_fn: VisionFn | None = None,
+    live_screen: bytes | None = None,
 ) -> dict | None:
-    """Return a match record or None. Structural first; vision only without structural trigger."""
+    """Return a match record or None. Origin-aware: structural for halt/captured, vision for described."""
+    origin = _origin_label(case)
+    if origin == CASE_ORIGIN_USER_DESCRIBED:
+        return _described_case_match(case, live_screen, vision_fn)
     tier1 = _tier1_case_match(case, structural)
     if tier1:
         return tier1
@@ -179,21 +267,28 @@ def decide_step_cases(
     wf_name: str,
     *,
     vision_fn: VisionFn | None = None,
+    live_screen: bytes | None = None,
 ) -> dict:
     """Decide whether to run a case, the normal path, or halt on ambiguity."""
     cases = list_step_cases(step)
     if not cases:
         return {"action": "normal", "log": "no cases on step", "candidates": []}
 
+    screen = live_screen
+    if screen is None and any(_origin_label(c) == CASE_ORIGIN_USER_DESCRIBED for c in cases):
+        screen = _capture_live_screen(wf_name)
+
     candidates: list[dict] = []
     for case in cases:
-        match = evaluate_case_match(case, structural, wf_name, vision_fn=vision_fn)
+        match = evaluate_case_match(
+            case, structural, wf_name, vision_fn=vision_fn, live_screen=screen,
+        )
         if match:
             candidates.append(match)
 
     high = [c for c in candidates if c.get("confidence") == "high"]
-    if len(high) == 1:
-        chosen = high[0]
+    chosen = _choose_high_match(high)
+    if chosen:
         return {
             "action": "case",
             "case_id": chosen["case_id"],
@@ -304,13 +399,21 @@ def plan_step_execution(
     *,
     before_demo: dict | None = None,
     vision_fn: VisionFn | None = None,
+    live_screen: bytes | None = None,
 ) -> dict:
     """Choose case vs normal execution before running a taught step."""
     from success_signals import snapshot_structural_state
     from teach_compile import step_to_node
 
     structural = before_demo or snapshot_structural_state()
-    decision = decide_step_cases(step, structural, wf.name, vision_fn=vision_fn)
+    screen = live_screen
+    if screen is None and any(
+        _origin_label(c) == CASE_ORIGIN_USER_DESCRIBED for c in list_step_cases(step)
+    ):
+        screen = _capture_live_screen(wf.name)
+    decision = decide_step_cases(
+        step, structural, wf.name, vision_fn=vision_fn, live_screen=screen,
+    )
     if decision["action"] == "case":
         case = decision["case"]
         return {

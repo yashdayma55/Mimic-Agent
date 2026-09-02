@@ -607,6 +607,63 @@ class ReviewHandler(BaseHTTPRequestHandler):
             self._send(status, body, ctype)
             return
 
+        if path == "/api/teach/case-capture-start":
+            data = self._read_json()
+            try:
+                result = ui_backend.teach_case_capture_start(
+                    data.get("name"), data.get("step_id"),
+                )
+            except Exception as e:
+                result = {"ok": False, "error": str(e)}
+            st = 400 if not result.get("ok") else 200
+            status, body, ctype = _json_bytes(result, status=st)
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/case-capture-frame":
+            data = self._read_json()
+            try:
+                result = ui_backend.teach_case_capture_frame(
+                    data.get("name"),
+                    data.get("step_id"),
+                    structural=data.get("structural"),
+                    synthetic_b64=data.get("synthetic_b64"),
+                )
+            except Exception as e:
+                result = {"ok": False, "error": str(e)}
+            st = 400 if not result.get("ok") else 200
+            status, body, ctype = _json_bytes(result, status=st)
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/case-describe":
+            data = self._read_json()
+            try:
+                result = ui_backend.teach_case_describe(
+                    data.get("name"),
+                    data.get("step_id"),
+                    data.get("description") or "",
+                )
+            except Exception as e:
+                result = {"ok": False, "error": str(e)}
+            st = 400 if not result.get("ok") else 200
+            status, body, ctype = _json_bytes(result, status=st)
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/case-authoring-cancel":
+            data = self._read_json()
+            try:
+                result = ui_backend.teach_case_authoring_cancel(
+                    data.get("name"), data.get("step_id"),
+                )
+            except Exception as e:
+                result = {"ok": False, "error": str(e)}
+            st = 400 if not result.get("ok") else 200
+            status, body, ctype = _json_bytes(result, status=st)
+            self._send(status, body, ctype)
+            return
+
         if path == "/api/teach/approve-behaviour":
             data = self._read_json()
             try:
