@@ -112,6 +112,28 @@ def validate_plan(plan, instruction: str | None = None) -> list[PlanViolation]:
                 violations.append(
                     PlanViolation("missing_param", f"action {action!r} requires {req}", nid)
                 )
+        if action == "chain":
+            extra = node.extra or {}
+            clicks = extra.get("clicks") or []
+            cc = int(extra.get("click_count") or len(clicks) or 0)
+            if cc not in (1, 2):
+                violations.append(
+                    PlanViolation("invalid_chain", f"click_count must be 1 or 2, got {cc}", nid)
+                )
+            elif len(clicks) != cc:
+                violations.append(
+                    PlanViolation(
+                        "invalid_chain",
+                        f"chain must have exactly {cc} click(s), got {len(clicks)}",
+                        nid,
+                    )
+                )
+            elif cc == 2 and clicks:
+                from chain_exec import validate_chain_node
+
+                err = validate_chain_node(node)
+                if err:
+                    violations.append(PlanViolation("invalid_chain", err, nid))
         for key in node.consumes or []:
             if key not in produced:
                 violations.append(

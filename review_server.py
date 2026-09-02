@@ -362,6 +362,16 @@ class ReviewHandler(BaseHTTPRequestHandler):
                     clear=data.get("clear"),
                     understanding=data.get("understanding"),
                     drop_photo=data.get("drop_photo"),
+                    click_count=data.get("click_count"),
+                    learned=data.get("learned"),
+                    drop_learned_shot=data.get("drop_learned_shot"),
+                    re_explain=data.get("re_explain"),
+                    qa_updates=data.get("qa_updates"),
+                    anchor_edits=data.get("anchor_edits"),
+                    reflection=data.get("reflection"),
+                    drop_qa=data.get("drop_qa"),
+                    drop_anchor_index=data.get("drop_anchor_index"),
+                    drop_sub_click=bool(data.get("drop_sub_click")),
                 )
             )
             self._send(status, body, ctype)
@@ -383,6 +393,19 @@ class ReviewHandler(BaseHTTPRequestHandler):
             status, body, ctype = _json_bytes(
                 ui_backend.teach_delete_step(data.get("name"), data.get("step_id"))
             )
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/remove-case":
+            data = self._read_json()
+            try:
+                result = ui_backend.teach_remove_case(
+                    data.get("name"), data.get("step_id"), data.get("case_id") or "",
+                )
+            except Exception as e:
+                result = {"ok": False, "error": str(e)}
+            st = 400 if not result.get("ok") else 200
+            status, body, ctype = _json_bytes(result, status=st)
             self._send(status, body, ctype)
             return
 
@@ -416,12 +439,33 @@ class ReviewHandler(BaseHTTPRequestHandler):
             self._send(status, body, ctype)
             return
 
+        if path == "/api/teach/capture":
+            data = self._read_json()
+            status, body, ctype = _json_bytes(
+                ui_backend.teach_capture(
+                    data.get("name"), data.get("step_id"),
+                    mode=data.get("mode") or "show",
+                    point=data.get("point"),
+                    batch=data.get("batch"),
+                    countdown=data.get("countdown"),
+                    window_sec=data.get("window_sec"),
+                    seconds=float(data.get("seconds") or 15),
+                    click_count=data.get("click_count"),
+                )
+            )
+            self._send(status, body, ctype)
+            return
+
         if path == "/api/teach/show":
             data = self._read_json()
             status, body, ctype = _json_bytes(
                 ui_backend.teach_show(
                     data.get("name"), data.get("step_id"),
                     point=data.get("point"), focus=bool(data.get("focus")),
+                    batch=data.get("batch"),
+                    countdown=data.get("countdown"),
+                    window_sec=data.get("window_sec"),
+                    sequential=bool(data.get("sequential")),
                 )
             )
             self._send(status, body, ctype)
@@ -452,7 +496,10 @@ class ReviewHandler(BaseHTTPRequestHandler):
         if path == "/api/teach/float":
             data = self._read_json()
             status, body, ctype = _json_bytes(
-                ui_backend.teach_arm_show(data.get("name"), data.get("step_id"))
+                ui_backend.teach_arm_show(
+                    data.get("name"), data.get("step_id"),
+                    click_count=data.get("click_count"),
+                )
             )
             self._send(status, body, ctype)
             return
@@ -515,11 +562,48 @@ class ReviewHandler(BaseHTTPRequestHandler):
             self._send(status, body, ctype)
             return
 
+        if path == "/api/teach/focus-target":
+            data = self._read_json()
+            status, body, ctype = _json_bytes(
+                ui_backend.teach_focus_target(data.get("name"), data.get("step_id"))
+            )
+            self._send(status, body, ctype)
+            return
+
         if path == "/api/teach/reflect":
             data = self._read_json()
             status, body, ctype = _json_bytes(
                 ui_backend.teach_reflect(data.get("name"), data.get("step_id"))
             )
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/case-remember":
+            data = self._read_json()
+            try:
+                result = ui_backend.teach_case_remember(
+                    data.get("name"), data.get("step_id"), data.get("answer") or "",
+                )
+            except Exception as e:
+                result = {"ok": False, "error": str(e)}
+            st = 400 if not result.get("ok") else 200
+            status, body, ctype = _json_bytes(result, status=st)
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/case-attach":
+            data = self._read_json()
+            try:
+                result = ui_backend.teach_case_attach(
+                    data.get("name"),
+                    data.get("halting_step_id") or data.get("step_id"),
+                    data.get("answer") or "",
+                    data.get("target_step_id"),
+                )
+            except Exception as e:
+                result = {"ok": False, "error": str(e)}
+            st = 400 if not result.get("ok") else 200
+            status, body, ctype = _json_bytes(result, status=st)
             self._send(status, body, ctype)
             return
 

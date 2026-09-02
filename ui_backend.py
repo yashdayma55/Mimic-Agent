@@ -655,7 +655,10 @@ def teach_set_context(name: str, text: str) -> dict:
 
 def teach_update_step(name: str, step_id: str, description=None, varies_note=None,
                      memory_note=None, web_allowed=None, clear=None,
-                     understanding=None, drop_photo=None) -> dict:
+                     understanding=None, drop_photo=None, click_count=None,
+                     learned=None, drop_learned_shot=None, re_explain=None,
+                     qa_updates=None, anchor_edits=None, reflection=None,
+                     drop_qa=None, drop_anchor_index=None, drop_sub_click=None) -> dict:
     from teach_loop import update_step
     from teaching import TeachingError, load_taught
 
@@ -666,10 +669,39 @@ def teach_update_step(name: str, step_id: str, description=None, varies_note=Non
             wf, step_id, description=description, varies_note=varies_note,
             memory_note=memory_note, web_allowed=web_allowed, clear=clear,
             understanding=understanding, drop_photo=drop_photo,
+            click_count=click_count, learned=learned,
+            drop_learned_shot=bool(drop_learned_shot),
+            qa_updates=qa_updates, anchor_edits=anchor_edits,
+            reflection=reflection,
+            drop_qa=drop_qa,
+            drop_anchor_index=drop_anchor_index,
+            drop_sub_click=bool(drop_sub_click),
+            re_explain=bool(re_explain),
         )
     except TeachingError as e:
         return {"ok": False, "error": str(e)}
-    return {"ok": True, "step": step.to_dict(), "workflow": wf.to_dict()}
+    wf = load_taught(name)
+    from teaching import get_step
+
+    st = get_step(wf, step_id)
+    return {
+        "ok": True,
+        "step": st.to_dict(),
+        "workflow": wf.to_dict(),
+        "edit_notice": st.edit_notice,
+    }
+
+
+def teach_remove_case(name: str, step_id: str, case_id: str) -> dict:
+    from teach_loop import remove_case
+    from teaching import TeachingError, load_taught
+
+    wf = load_taught(name)
+    try:
+        step = remove_case(wf, step_id, case_id)
+    except TeachingError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "step": step.to_dict()}
 
 
 def teach_delete_step(name: str, step_id: str) -> dict:
@@ -704,8 +736,16 @@ def teach_add_photo(name: str, step_id: str, image_b64: str, filename: str = "sh
 
 def teach_observe(name: str, step_id: str, seconds: float = 15) -> dict:
     from observe import watch_step
+    from teaching import get_step, load_taught
 
-    return watch_step(name, step_id, seconds=seconds)
+    out = watch_step(name, step_id, seconds=seconds)
+    try:
+        st = get_step(load_taught(name), step_id)
+        out["step"] = st.to_dict()
+        out["last_capture"] = st.last_capture
+    except Exception:
+        pass
+    return out
 
 
 def teach_add_step(name: str, description: str, varies_note: str = "") -> dict:
@@ -736,21 +776,70 @@ def teach_answer(name: str, step_id: str, question: str, answer: str) -> dict:
     return {"ok": True, "step": step.to_dict()}
 
 
-def teach_show(name: str, step_id: str, point=None, focus: bool = False) -> dict:
+def teach_show(name: str, step_id: str, point=None, focus: bool = False,
+               batch=None, countdown=None, window_sec=None, sequential: bool = False) -> dict:
     from teach_loop import answer_show
-    from teaching import load_taught
+    from teaching import get_step, load_taught
 
     wf = load_taught(name)
-    kwargs = {"countdown": 0, "focus": bool(focus)}
+    kwargs = {"focus": bool(focus), "sequential": bool(sequential)}
+    if countdown is not None:
+        kwargs["countdown"] = float(countdown)
+    else:
+        kwargs["countdown"] = 0
+    if window_sec is not None:
+        kwargs["window_sec"] = float(window_sec)
+    if batch is not None:
+        kwargs["batch"] = bool(batch)
     if point and len(point) == 2:
         kwargs["point"] = (int(point[0]), int(point[1]))
-    return answer_show(wf, step_id, **kwargs)
+    out = answer_show(wf, step_id, **kwargs)
+    try:
+        st = get_step(load_taught(name), step_id)
+        out["step"] = st.to_dict()
+        out["last_capture"] = st.last_capture
+    except Exception:
+        pass
+    return out
 
 
-def teach_arm_show(name: str, step_id: str) -> dict:
+def teach_capture(name: str, step_id: str, mode: str = "show", point=None,
+                  batch=None, countdown=None, window_sec=None, seconds: float = 15,
+                  click_count: int | None = None) -> dict:
+    """Unified capture path for float widget and review card."""
+    mode = (mode or "show").lower()
+    if mode == "watch":
+        return teach_observe(name, step_id, seconds=seconds)
+    if click_count is not None and step_id not in ("__start__", "start", "start_screen"):
+        from teaching import get_step, load_taught, save_taught, validate_click_count
+
+        wf = load_taught(name)
+        step = get_step(wf, step_id)
+        step.click_count = validate_click_count(click_count)
+        save_taught(wf)
+    return teach_show(
+        name, step_id, point=point, batch=batch,
+        countdown=countdown, window_sec=window_sec,
+    )
+
+
+def teach_arm_show(name: str, step_id: str, click_count: int | None = None) -> dict:
     from float_widget import arm_show
+    from teaching import get_step, load_taught, save_taught, validate_click_count
 
-    return arm_show(workflow=name, step_id=step_id, api_url="http://127.0.0.1:8765")
+    wf = load_taught(name)
+    if click_count is not None and step_id not in ("__start__", "start", "start_screen"):
+        step = get_step(wf, step_id)
+        step.click_count = validate_click_count(click_count)
+        save_taught(wf)
+    cc = 1
+    try:
+        cc = int(getattr(get_step(wf, step_id), "click_count", 1) or 1)
+    except Exception:
+        pass
+    out = arm_show(workflow=name, step_id=step_id, api_url="http://127.0.0.1:8765", click_count=cc)
+    out["click_count"] = cc
+    return out
 
 
 def teach_choose_witness(name: str, step_id: str, choice: str) -> dict:
@@ -827,6 +916,41 @@ def teach_demo(name: str, step_id: str, test_values: dict | None = None, mode: s
 
     wf = load_taught(name)
     return demo_step(wf, step_id, test_values=test_values, mode=mode)
+
+
+def teach_focus_target(name: str, step_id: str) -> dict:
+    from teach_compile import focus_step_target
+    from teaching import load_taught
+
+    wf = load_taught(name)
+    out = focus_step_target(wf, step_id)
+    return {"ok": bool(out.get("ok")), **out}
+
+
+def teach_case_remember(name: str, step_id: str, answer: str) -> dict:
+    from case_halt_loop import answer_remember_case
+    from teaching import TeachingError, load_taught
+
+    wf = load_taught(name)
+    try:
+        out = answer_remember_case(wf, step_id, answer)
+    except TeachingError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, **out}
+
+
+def teach_case_attach(name: str, halting_step_id: str, answer: str, target_step_id: str | None = None) -> dict:
+    from case_halt_loop import answer_attach_case_step
+    from teaching import TeachingError, load_taught
+
+    wf = load_taught(name)
+    try:
+        out = answer_attach_case_step(
+            wf, halting_step_id, answer, target_step_id=target_step_id,
+        )
+    except TeachingError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, **out}
 
 
 def teach_reflect(name: str, step_id: str) -> dict:

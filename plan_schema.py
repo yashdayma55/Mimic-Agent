@@ -7,6 +7,7 @@ from typing import Any, Optional
 
 CLOSED_ACTIONS = (
     "click",
+    "chain",
     "type",
     "press",
     "scroll",
@@ -28,6 +29,7 @@ CLOSED_ACTIONS = (
 
 REQUIRED_PARAMS = {
     "click": (),
+    "chain": (),
     "type": ("value",),
     "press": ("value",),
     "scroll": (),
@@ -69,7 +71,7 @@ class PlanNode:
 
     def to_runner_step(self) -> dict:
         keys = self.value or ""
-        return {
+        base = {
             "kind": "native",
             "action": self.action,
             "text": keys if self.action == "type" else "",
@@ -83,6 +85,12 @@ class PlanNode:
             "irreversible": self.irreversible,
             **(self.extra or {}),
         }
+        if self.action == "chain":
+            extra = self.extra or {}
+            base["clicks"] = extra.get("clicks") or []
+            base["anchors"] = extra.get("anchors") or []
+            base["click_count"] = extra.get("click_count") or len(base["clicks"])
+        return base
 
 
 @dataclass

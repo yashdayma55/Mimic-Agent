@@ -212,6 +212,23 @@
     .assume li { font-size: 12.8px; color: var(--ink-2); }
     .learned { margin: 12px 0; padding: 10px 12px; background: var(--verified-bg); border-left: 2px solid var(--verified); }
     .learned p { margin: 0; font-size: 13.5px; }
+    .hint { margin: 8px 0 0; font-size: 12.5px; color: var(--ink-3); line-height: 1.45; }
+    .card-sec {
+      border: 1px solid var(--rule); border-radius: var(--r); margin: 12px 0;
+      background: var(--surface); overflow: hidden;
+    }
+    .sec-h {
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      padding: 8px 12px; background: var(--paper); border-bottom: 1px solid var(--rule);
+      font-family: "IBM Plex Mono", monospace; font-size: 10px; letter-spacing: .08em;
+      text-transform: uppercase; color: var(--ink-2);
+    }
+    .sec-b { padding: 12px; }
+    .sec-save { font-size: 11px !important; padding: 4px 10px !important; min-height: 0 !important; }
+    .save-all-bar {
+      margin: 14px 0 8px; padding-top: 12px; border-top: 1px dashed var(--rule);
+      display: flex; justify-content: flex-end; gap: 8px;
+    }
     .field textarea {
       width: 100%; border: 1px solid var(--rule-2); border-radius: var(--r);
       padding: 8px 11px; background: var(--paper); min-height: 72px; resize: vertical;
@@ -233,6 +250,16 @@
     }
     .start .lede { margin: 6px 0 12px; color: var(--ink-2); font-size: 13.5px; }
     .witnesses { margin: 10px 0; border: 1px solid var(--rule); border-radius: var(--r); overflow: hidden; }
+    .witnesses .wit-line {
+      font-family: "IBM Plex Mono", monospace; font-size: 11.5px; padding: 6px 10px;
+      border-bottom: 1px solid var(--rule-2); color: var(--ink-2);
+    }
+    .witnesses .wit-line:last-child { border-bottom: 0; }
+    .witnesses .wit-line.mute { color: var(--ink-3); font-style: italic; }
+    .resolve-line {
+      font-family: "IBM Plex Mono", monospace; font-size: 11.5px; color: var(--verified);
+      margin: 0 0 8px;
+    }
     .wit {
       display: grid; grid-template-columns: 64px 1fr 52px; gap: 8px; align-items: start;
       padding: 7px 10px; border-top: 1px solid var(--rule-2); font-size: 12.5px;
@@ -261,6 +288,21 @@
     .reflect.bad .k { color: var(--alert); }
     .reflect p { margin: 0 0 4px; font-size: 13px; }
     .reflect code { font-family: "IBM Plex Mono", monospace; font-size: 12px; }
+
+    .case-list { display: flex; flex-direction: column; gap: 10px; }
+    .case-row {
+      display: grid; grid-template-columns: 72px 1fr auto; gap: 10px; align-items: start;
+      border: 1px solid var(--rule); border-radius: var(--r); padding: 10px; background: var(--paper);
+    }
+    .case-thumb { width: 72px; height: 54px; border-radius: 6px; object-fit: cover; border: 1px solid var(--rule); background: var(--surface); }
+    .case-thumb.empty { display: block; }
+    .case-body { min-width: 0; }
+    .case-label { font-size: 13px; font-weight: 500; margin: 0 0 4px; }
+    .case-mono { font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--ink-3); margin: 0 0 4px; word-break: break-word; }
+    .case-success { font-size: 12px; color: var(--ink-2); margin: 0 0 4px; }
+    .case-stats { font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--ink-3); margin: 0; }
+    .case-stats.warn { color: var(--attention); }
+    .case-actions { display: flex; flex-direction: column; gap: 6px; }
 
     .addstep {
       width: 100%; border: 1px dashed var(--rule); background: none; border-radius: 8px;
@@ -426,6 +468,10 @@
   function unanswered(log) {
     return (log || []).filter(function (q) { return q.q && !(q.a || "").trim(); }).map(function (q) { return q.q; });
   }
+  var CAPTURE_FLOW_KINDS = { chain_second: 1, capture_prompt: 1 };
+  function isQuestionKind(kind) {
+    return !CAPTURE_FLOW_KINDS[kind || ""];
+  }
   function pendingItems(s) {
     var items = (s.qa_history || []).filter(function (q) { return q.q && !(q.a || "").trim(); });
     var extra = s.understanding && (s.understanding.clarifying_question || s.understanding.followup_question);
@@ -439,13 +485,67 @@
     });
     return items;
   }
+  function pendingQuestions(s) {
+    return pendingItems(s).filter(function (q) { return isQuestionKind(q.kind); }).slice(0, 3);
+  }
+  function captureFlowPrompt(s) {
+    var cc = s.chain_capture || {};
+    if (cc.prompt) return cc.prompt;
+    var leg = (s.qa_history || []).find(function (q) {
+      return (q.kind === "chain_second" || q.kind === "capture_prompt") && !(q.a || "").trim();
+    });
+    return leg ? leg.q : "";
+  }
   function pendingOf(s) {
-    return pendingItems(s).map(function (q) { return q.q; });
+    return pendingQuestions(s).map(function (q) { return q.q; });
   }
   function cropUrl(anchor) {
     var rel = (anchor && (anchor.preview_path || anchor.preview_path || anchor.context_path || anchor.crop_path)) || "";
     if (!rel || !state.current) return "";
     return "/screenshots/crop.png?name=" + encodeURIComponent(state.current) + "&rel=" + encodeURIComponent(rel);
+  }
+  function caseFrameUrl(rel) {
+    if (!rel || !state.current) return "";
+    return "/screenshots/crop.png?name=" + encodeURIComponent(state.current) + "&rel=" + encodeURIComponent(rel);
+  }
+  function caseLabel(c) {
+    var tr = c.trigger || {};
+    if (tr.foreground_title) return "a " + tr.foreground_title + " screen appears";
+    var elems = tr.a11y_present || [];
+    if (elems.length && elems[0].name) return "'" + elems[0].name + "' is on screen";
+    var sc = c.success_check || {};
+    if (sc.text || sc.detail) return sc.text || sc.detail;
+    return "case " + (c.id || "?");
+  }
+  function caseTriggerMono(tr) {
+    tr = tr || {};
+    var parts = [];
+    if (tr.foreground_title) parts.push("title:" + tr.foreground_title);
+    (tr.a11y_present || []).forEach(function (el) {
+      if (el && el.name) parts.push("a11y:" + el.name + (el.control_type ? "/" + el.control_type : ""));
+    });
+    if (tr.browser_url) parts.push("url:" + tr.browser_url);
+    if (tr.halt_signature) parts.push("vision-only");
+    return parts.length ? parts.join(" · ") : "—";
+  }
+  function caseStatsText(c) {
+    var n = c.times_matched || 0;
+    if (!n) return "never matched yet";
+    var last = c.last_matched;
+    if (!last) return "matched " + n + " time" + (n === 1 ? "" : "s");
+    var then = new Date(last).getTime();
+    if (isNaN(then)) return "matched " + n + " time" + (n === 1 ? "" : "s");
+    var days = Math.floor((Date.now() - then) / 86400000);
+    var when = days === 0 ? "today" : (days === 1 ? "1 day ago" : days + " days ago");
+    return "matched " + n + " time" + (n === 1 ? "" : "s") + " · last " + when;
+  }
+  function caseSuccessText(c) {
+    var sc = c.success_check || {};
+    if (sc.text || sc.detail) return sc.text || sc.detail;
+    var check = sc.check || {};
+    if (check.expected) return String(check.expected);
+    if (check.type) return String(check.type);
+    return "—";
   }
 
   function renderRail() {
@@ -484,47 +584,240 @@
     return "<dt>" + k + "</dt><dd class=\"" + (v ? "" : "none") + "\">" + (v || "none") + "</dd>";
   }
 
+  function secHdr(title, stepId, section) {
+    return '<div class="sec-h"><span>' + esc(title) + '</span>'
+      + '<button type="button" class="btn sec-save" data-act="savesec" data-step="' + stepId
+      + '" data-sec="' + section + '">Save</button></div>';
+  }
+
+  function collectStepFields(id, sec) {
+    var payload = { re_explain: true };
+    var all = sec === "all";
+    if (sec === "basics" || all) {
+      var d = document.querySelector('[data-desc="' + id + '"]');
+      var dyn = document.querySelector('[data-dyn="' + id + '"]');
+      var mem = document.querySelector('[data-mem="' + id + '"]');
+      var clk = document.querySelector('[data-clicks="' + id + '"]');
+      var web = document.querySelector('[data-web="' + id + '"]');
+      if (d) payload.description = d.value;
+      if (dyn) payload.varies_note = dyn.value;
+      if (mem) payload.memory_note = mem.value;
+      if (clk) payload.click_count = parseInt(clk.value, 10) || 1;
+      if (web) payload.web_allowed = web.checked;
+    }
+    if (sec === "learned" || all) {
+      var sumEl = document.querySelector('[data-learned-sum="' + id + '"]');
+      var visEl = document.querySelector('[data-learned-vis="' + id + '"]');
+      if (sumEl || visEl) {
+        payload.learned = {
+          summary: sumEl ? sumEl.value : "",
+          vision: visEl ? visEl.value : ""
+        };
+      }
+    }
+    if (sec === "qa" || all) {
+      var qa = [];
+      document.querySelectorAll('[data-qa-ans="' + id + '"]').forEach(function (el) {
+        qa.push({ q: el.getAttribute("data-q"), a: el.value });
+      });
+      document.querySelectorAll('[data-ans="' + id + '"]').forEach(function (el) {
+        if (el.value.trim()) qa.push({ q: el.getAttribute("data-q"), a: el.value.trim() });
+      });
+      if (qa.length) payload.qa_updates = qa;
+    }
+    if (sec === "anchors" || all) {
+      var edits = [];
+      document.querySelectorAll('[data-anc="' + id + '"]').forEach(function (el) {
+        var idx = parseInt(el.getAttribute("data-idx") || "0", 10);
+        var field = el.getAttribute("data-field");
+        var row = edits[idx] || { sub_index: idx };
+        row[field] = el.value;
+        edits[idx] = row;
+      });
+      edits = edits.filter(Boolean);
+      if (edits.length) payload.anchor_edits = edits;
+    }
+    if (sec === "understanding" || all) {
+      var und = {};
+      var have = false;
+      document.querySelectorAll('[data-und="' + id + '"]').forEach(function (el) {
+        und[el.getAttribute("data-field")] = el.value;
+        have = true;
+      });
+      var aEl = document.querySelector('[data-und-assume="' + id + '"]');
+      if (aEl) {
+        und.assumptions = aEl.value.split("\n").map(function (x) { return x.trim(); }).filter(Boolean);
+        have = true;
+      }
+      if (have) payload.understanding = und;
+    }
+    if (sec === "reflection" || all) {
+      var obs = document.querySelector('[data-ref-obs="' + id + '"]');
+      var did = document.querySelector('[data-ref-did="' + id + '"]');
+      if (obs || did) {
+        payload.reflection = {
+          what_i_observed: obs ? obs.value : "",
+          what_i_did: did ? did.value : ""
+        };
+      }
+    }
+    return payload;
+  }
+
+  function saveStepSection(id, sec) {
+    var payload = collectStepFields(id, sec);
+    payload.name = state.current;
+    payload.step_id = id;
+    return api("/api/teach/patch", payload).then(function (d) {
+      fail(d, "could not save");
+      toast(d.edit_notice || "Saved — agent re-read this section.", d.edit_notice ? "ok" : "ok");
+      if (d.step) {
+        var i = state.steps.findIndex(function (x) { return x.id === id; });
+        if (i >= 0) state.steps[i] = d.step;
+      }
+      var nq = d.step && d.step.understanding
+        && (d.step.understanding.clarifying_question || d.step.understanding.followup_question);
+      if (nq) state.pending[id] = [nq];
+      return d;
+    });
+  }
+
   function bodyHtml(s) {
     var h = "";
     var pending = pendingOf(s);
+    if (s.edit_notice && s.status !== "approved") {
+      h += '<p class="hint" style="color:var(--attention)">' + esc(s.edit_notice) + "</p>";
+    }
+    if (s.case_halt) {
+      var haltMsg = "I expected " + esc(s.case_halt.expected || "the usual screen")
+        + ". I see " + esc(s.case_halt.observed || "something unexpected") + " instead.";
+      if (s.case_halt.ambiguity && s.case_halt.ambiguity.log) {
+        haltMsg = esc(s.case_halt.ambiguity.log);
+      }
+      h += '<div class="card-sec halt-banner"><div class="sec-h">Unexpected screen — stopped</div><div class="sec-b">'
+        + '<p class="hint" style="color:var(--attention)">' + haltMsg + "</p>";
+      if (!s.case_halt.resolution) {
+        h += '<p class="hint">Resolve with <b>Show me</b> or <b>Watch me</b> below, or edit this step.</p>';
+      }
+      h += "</div></div>";
+    }
+    if (s.last_capture && s.last_capture.message) {
+      h += '<p class="hint">Last capture: ' + esc(s.last_capture.outcome) + " — " + esc(s.last_capture.message) + "</p>";
+    }
+    h += '<div class="card-sec">' + secHdr("Step basics", s.id, "basics") + '<div class="sec-b">';
     h += '<div class="field"><label>What does this step do?</label>'
       + '<input data-desc="' + s.id + '" value="' + esc(s.user_description) + '" placeholder="Click the text editor in Notepad"></div>'
       + '<div class="field"><label>What changes each run?</label>'
-      + '<input data-dyn="' + s.id + '" value="' + esc(s.varies_note) + '" placeholder="Nothing, or e.g. {filename}"></div>';
-    if (s.learned && s.learned.summary) {
-      h += '<div class="learned"><div class="k">What I learned watching you '
-        + '<button type="button" class="xbtn" data-act="clear" data-step="' + s.id + '" data-key="learned">remove</button></div>'
-        + "<p>" + esc(s.learned.summary) + "</p></div>";
+      + '<input data-dyn="' + s.id + '" value="' + esc(s.varies_note) + '" placeholder="Nothing, or e.g. {filename}">'
+      + ' <button type="button" class="xbtn" data-act="clearvaries" data-step="' + s.id + '">remove</button></div>';
+    var cc = s.click_count || 1;
+    h += '<div class="field"><label>How many clicks is this step?</label>'
+      + '<select data-clicks="' + s.id + '">'
+      + '<option value="1"' + (cc === 1 ? " selected" : "") + '>1</option>'
+      + '<option value="2"' + (cc === 2 ? " selected" : "") + '>2</option>'
+      + "</select></div>";
+    if (cc === 2) {
+      h += '<p class="hint">2-click mode: press <b>Show me</b> once, then do both clicks in one go (about 25 seconds).</p>';
+    }
+    if (s.expected_start_frame) {
+      h += '<p class="hint">Should begin where the previous step ended — see <code>' + esc(s.expected_start_frame) + "</code>.</p>";
     }
     h += '<div class="field"><label>Your notes for this step</label>'
       + '<textarea data-mem="' + s.id + '" rows="3" placeholder="e.g. write the cold email in this voice: short, specific, no fluff">'
-      + esc(s.memory_note || "") + "</textarea></div>"
+      + esc(s.memory_note || "") + "</textarea>"
+      + ' <button type="button" class="xbtn" data-act="clearnotes" data-step="' + s.id + '">remove</button></div>'
       + '<label class="webchk"><input type="checkbox" data-web="' + s.id + '"'
       + (s.web_allowed ? " checked" : "") + "> May look this up on the web when running</label>";
-    var answered = (s.qa_history || []).filter(function (q) { return (q.a || "").trim(); });
-    if (answered.length) {
-      h += '<div class="qa">' + answered.map(function (q) {
-        return '<div class="q"><span class="mark">asked</span><div><p>' + esc(q.q) + '</p><span class="answered">' + esc(q.a) + "</span></div></div>";
-      }).join("") + "</div>";
+    h += "</div></div>";
+
+    if (s.learned && (s.learned.summary || s.learned.vision || s.learned.shot)) {
+      var lrn = s.learned;
+      var shotSrc = lrn.shot ? cropUrl({ preview_path: lrn.shot }) : "";
+      h += '<div class="card-sec">' + secHdr("Watch me — what I learned", s.id, "learned") + '<div class="sec-b">';
+      if (shotSrc) {
+        h += '<div class="shot" style="margin:0 0 8px;width:100%"><img src="' + esc(shotSrc) + '" alt="" style="max-width:100%;border-radius:6px">'
+          + '<button type="button" class="xbtn" data-act="clear" data-step="' + s.id + '" data-key="learned_shot">remove screenshot</button></div>';
+      }
+      h += '<div class="field"><label>Summary</label>'
+        + '<textarea data-learned-sum="' + s.id + '" rows="3">' + esc(lrn.summary || "") + "</textarea></div>"
+        + '<div class="field"><label>Vision</label>'
+        + '<textarea data-learned-vis="' + s.id + '" rows="2" placeholder="What the vision model saw">'
+        + esc(lrn.vision || "") + "</textarea></div>";
+      h += '<button type="button" class="xbtn" data-act="clear" data-step="' + s.id + '" data-key="learned">remove all learned</button>';
+      h += "</div></div>";
     }
-    var openQs = pendingItems(s);
-    if (openQs.length) {
-      h += '<div class="qa">' + openQs.map(function (item, n) {
+
+    var answered = (s.qa_history || []).filter(function (q) { return (q.a || "").trim() && isQuestionKind(q.kind); });
+    var openQs = pendingQuestions(s);
+    var capPrompt = captureFlowPrompt(s);
+    if (capPrompt) {
+      h += '<div class="card-sec capture-flow"><div class="sec-h">Capture flow</div><div class="sec-b">'
+        + '<p class="hint capture-prompt">' + esc(capPrompt) + "</p></div></div>";
+    }
+    if (answered.length || openQs.length) {
+      h += '<div class="card-sec">' + secHdr("Questions & answers", s.id, "qa") + '<div class="sec-b"><div class="qa">';
+      answered.forEach(function (q) {
+        h += '<div class="q"><span class="mark">asked</span><div><p>' + esc(q.q)
+          + ' <button type="button" class="xbtn" data-act="dropqa" data-step="' + s.id + '" data-q="' + esc(q.q) + '">remove</button></p>'
+          + '<textarea data-qa-ans="' + s.id + '" data-q="' + esc(q.q) + '" rows="2">' + esc(q.a) + "</textarea>"
+          + ' <button type="button" class="xbtn" data-act="dropqa" data-step="' + s.id + '" data-q="' + esc(q.q) + '">remove answer</button></div></div>';
+      });
+      openQs.forEach(function (item, n) {
         var q = item.q || item;
         var kind = item.kind || "";
         var block = '<div class="q"><span class="mark">asks</span><div><p>' + esc(q) + "</p>";
         if (kind === "show_confirm") {
           block += '<div class="actions">'
             + '<button class="btn primary" data-act="showyes" data-step="' + s.id + '" data-q="' + esc(q) + '">Yes, that one</button>'
-            + '<button class="btn" data-act="showno" data-step="' + s.id + '" data-q="' + esc(q) + '">No, show me again</button>'
-            + "</div>";
+            + '<button class="btn" data-act="showno" data-step="' + s.id + '" data-q="' + esc(q) + '">No, show me again</button></div>';
+        } else if (kind === "chain_one_click") {
+          block += '<div class="actions">'
+            + '<button class="btn primary" data-act="chainone" data-step="' + s.id + '" data-q="' + esc(q) + '">Yes, one click</button>'
+            + '<button class="btn" data-act="chaintwo" data-step="' + s.id + '" data-q="' + esc(q) + '">No, show second</button></div>';
+        } else if (kind === "chain_summary") {
+          block += '<div class="actions">'
+            + '<button class="btn primary" data-act="chainsumyes" data-step="' + s.id + '" data-q="' + esc(q) + '">Yes, that\'s the whole step</button></div>';
+        } else if (kind === "success_confirm") {
+          block += '<div class="actions">'
+            + '<button class="btn primary" data-act="successyes" data-step="' + s.id + '" data-q="' + esc(q) + '">Yes</button>'
+            + '<button class="btn" data-act="successpart" data-step="' + s.id + '" data-q="' + esc(q) + '">Partly — let me correct it</button>'
+            + '<button class="btn" data-act="successno" data-step="' + s.id + '" data-q="' + esc(q) + '">No, it\'s something else</button></div>';
+        } else if (kind === "vision_mismatch") {
+          block += '<div class="actions">'
+            + '<button class="btn primary" data-act="visionyes" data-step="' + s.id + '" data-q="' + esc(q) + '">Use this target</button>'
+            + '<button class="btn" data-act="visionno" data-step="' + s.id + '" data-q="' + esc(q) + '">Show me again</button></div>';
+        } else if (kind === "parent_target") {
+          block += '<div class="actions">'
+            + '<button class="btn primary" data-act="parentyes" data-step="' + s.id + '" data-q="' + esc(q) + '">Yes, click the parent</button>'
+            + '<button class="btn" data-act="parentno" data-step="' + s.id + '" data-q="' + esc(q) + '">No, use what I clicked</button></div>';
+        } else if (kind === "case_remember") {
+          block += '<div class="actions">'
+            + '<button class="btn primary" data-act="caseyes" data-step="' + s.id + '" data-q="' + esc(q) + '">Yes, remember it</button>'
+            + '<button class="btn" data-act="caseno" data-step="' + s.id + '" data-q="' + esc(q) + '">No, one-off</button></div>';
+        } else if (kind === "case_attach_step") {
+          var stepOpts = (state.steps || []).map(function (st, idx) {
+            return '<option value="' + esc(st.id) + '">step ' + (idx + 1) + " — " + esc(st.user_description || "Untitled step") + "</option>";
+          }).join("");
+          var haltNum = (state.steps || []).findIndex(function (st) { return st.id === s.id; }) + 1;
+          block += '<div class="actions">'
+            + '<button class="btn primary" data-act="caseattachyes" data-step="' + s.id + '">Yes, step '
+            + (haltNum > 0 ? haltNum : "?") + "</button>"
+            + '<select data-caseattach="' + s.id + '" style="max-width:240px">' + stepOpts + "</select>"
+            + '<button class="btn" data-act="caseattachpick" data-step="' + s.id + '">Choose a different step</button></div>';
+        } else if (kind === "case_disambiguate") {
+          var caseIds = (s.cases || []).map(function (c) { return c.id; }).join(", ");
+          block += '<p class="hint">Reply with a case id (' + esc(caseIds) + ') or type <b>normal</b>.</p>';
         }
         block += '<input data-ans="' + s.id + '" data-q="' + esc(q) + '" placeholder="Type your answer here"'
           + (n === 0 ? " autofocus" : "") + "></div></div>";
-        return block;
-      }).join("") + "</div>";
+        h += block;
+      });
+      h += "</div></div></div>";
     }
+
     var photos = s.photos || [];
+    var anchorList = (s.anchors && s.anchors.length) ? s.anchors.filter(Boolean) : (s.anchor ? [s.anchor] : []);
+    h += '<div class="card-sec">' + secHdr("Captures & anchors", s.id, "anchors") + '<div class="sec-b">';
     if (photos.length) {
       h += '<div class="shots">' + photos.map(function (p) {
         var rel = p.path || p;
@@ -534,67 +827,127 @@
     }
     h += '<div class="field"><label>Add a screenshot</label>'
       + '<input type="file" accept="image/*" data-photo="' + s.id + '"></div>';
-    if (s.anchor && s.anchor.witnesses) {
-      var wits = s.anchor.witnesses;
-      var agr = s.anchor.agreement || "";
-      var primPipe = (s.anchor.primary && s.anchor.primary.pipeline) || "";
-      var unresolved = !!s.anchor.conflict_unresolved;
-      h += '<div class="witnesses">';
-      ["a11y", "dom", "vision"].forEach(function (k) {
-        var w = wits[k] || {};
-        var cls = "wit";
-        if (primPipe === k && !unresolved) cls += " primary";
-        else if (primPipe && primPipe !== k) cls += " fallback";
-        var mark = (primPipe === k && !unresolved) ? "primary" : (w.confidence || "");
-        h += '<div class="' + cls + '"><span class="pipe">' + k + '</span>'
-          + '<span class="account">' + esc(w.account || (w.saw ? "saw something" : "saw nothing")) + "</span>"
-          + '<span class="conf">' + esc(mark) + "</span></div>";
-      });
-      if (!unresolved) {
-        var line = agr === "agree" ? "all three agree" : (agr === "single" ? "only one pipeline saw this" : agr);
-        if (primPipe) line += primPipe ? (" · primary " + primPipe) : "";
-        h += '<div class="wit-agree">' + esc(line) + "</div>";
+    anchorList.forEach(function (anc, ai) {
+      if (!anc) return;
+      var p = anc.primary || {};
+      var src = cropUrl(anc);
+      var label = anchorList.length > 1 ? ("Click " + (ai + 1)) : "Captured target";
+      h += '<div class="anchor" style="margin-top:10px"><div class="crop' + (anc.focused ? " tight" : "") + '">'
+        + (src ? '<img src="' + esc(src) + '" alt="">' : "")
+        + '</div><div class="field"><label>' + label + ' — name</label>'
+        + '<input data-anc="' + s.id + '" data-idx="' + ai + '" data-field="name" value="' + esc(p.name || "") + '"></div>'
+        + '<div class="field"><label>Path / parent</label>'
+        + '<input data-anc="' + s.id + '" data-idx="' + ai + '" data-field="parent_path" value="' + esc(anc.parent_path || "") + '"></div>'
+        + '<div class="field"><label>Your note on this capture</label>'
+        + '<textarea data-anc="' + s.id + '" data-idx="' + ai + '" data-field="user_note" rows="2">'
+        + esc(anc.user_note || "") + "</textarea></div>";
+      if (anc.witnesses) {
+        var wits = anc.witnesses;
+        var rline = anc.resolution_line || "";
+        if (rline) {
+          h += '<p class="resolve-line">' + esc(rline) + "</p>";
+        }
+        h += '<div class="witnesses">';
+        ["a11y", "dom", "vision", "cursor"].forEach(function (k) {
+          var w = wits[k] || {};
+          var acct = w.account || (w.saw ? "saw something" : "saw nothing");
+          var cls = w.saw ? "wit-line" : "wit-line mute";
+          h += '<div class="' + cls + '"><b>' + k + ":</b> " + esc(acct) + "</div>";
+        });
+        h += "</div>";
+        h += '<div class="witnesses" style="margin-top:8px">';
+        ["a11y", "dom", "vision", "cursor"].forEach(function (k) {
+          var w = wits[k] || {};
+          h += '<div class="field"><label>' + k + ' (edit account)</label>'
+            + '<textarea data-anc="' + s.id + '" data-idx="' + ai + '" data-field="wit_' + k + '" rows="2">'
+            + esc(w.account || "") + "</textarea></div>";
+        });
+        h += "</div>";
+      }
+      if (ai === 0 && anchorList.length > 1) {
+        h += '<button type="button" class="xbtn" data-act="dropsub" data-step="' + s.id + '">remove 2nd click (back to 1)</button>';
+      }
+      h += '<button type="button" class="xbtn" data-act="dropanchor" data-step="' + s.id + '" data-idx="' + ai + '">remove this anchor</button>';
+      if (ai === 0 && anchorList.length === 1) {
+        h += '<button type="button" class="xbtn" data-act="clear" data-step="' + s.id + '" data-key="anchor">remove all anchors</button>';
       }
       h += "</div>";
-      if (unresolved) {
-        var q = (s.qa_history || []).slice().reverse().find(function (qq) {
-          return qq.kind === "witness_conflict" && !(qq.a || "").trim();
+      if (anc.vision_mismatch_pending) {
+        var vmq = (s.qa_history || []).slice().reverse().find(function (qq) {
+          return qq.kind === "vision_mismatch" && !(qq.a || "").trim();
         });
-        var choices = (q && q.choices) || ["a11y", "vision", "dom", "neither — let me show you again"];
-        h += '<div class="wit-q"><div class="k">They disagree — which one do you mean?</div>'
-          + (q ? "<p>" + esc(q.q) + "</p>" : "")
-          + '<div class="actions">'
-          + choices.map(function (c) {
-            return '<button class="btn' + (c.indexOf("neither") === 0 ? "" : " primary") + '" data-act="witness" data-step="' + s.id + '" data-choice="' + esc(c) + '">' + esc(c) + "</button>";
-          }).join("")
-          + "</div></div>";
+        if (vmq) {
+          h += '<div class="q wit-q"><span class="mark">asks</span><div><p>' + esc(vmq.q) + "</p>"
+            + '<div class="actions">'
+            + '<button class="btn primary" data-act="visionyes" data-step="' + s.id + '" data-q="' + esc(vmq.q) + '">Use this target</button>'
+            + '<button class="btn" data-act="visionno" data-step="' + s.id + '" data-q="' + esc(vmq.q) + '">Show me again</button>'
+            + "</div></div></div>";
+        }
       }
-    }
-    if (s.anchor) {
-      var p = s.anchor.primary || {};
-      var src = cropUrl(s.anchor);
-      var tight = !!s.anchor.focused;
-      h += '<div class="anchor"><div class="crop' + (tight ? " tight" : "") + '">'
-        + (src ? '<img src="' + esc(src) + '" alt="">' : "")
-        + '</div><div class="anchor-body"><div class="k">Captured screen '
-        + '<button type="button" class="xbtn" data-act="clear" data-step="' + s.id + '" data-key="anchor">remove</button></div><dl>'
-        + "<dt>name</dt><dd>" + esc(p.name || "—") + "</dd>"
-        + "<dt>type</dt><dd>" + esc(p.control_type || p.kind || "—") + "</dd>"
-        + "<dt>path</dt><dd>" + esc(s.anchor.parent_path || "—") + "</dd></dl>"
-        + "</div></div>";
-    }
+      if (!anc.vision_mismatch_pending) {
+        var ptq = (s.qa_history || []).slice().reverse().find(function (qq) {
+          return qq.kind === "parent_target" && !(qq.a || "").trim();
+        });
+        if (ptq) {
+          h += '<div class="q wit-q"><span class="mark">asks</span><div><p>' + esc(ptq.q) + "</p>"
+            + '<div class="actions">'
+            + '<button class="btn primary" data-act="parentyes" data-step="' + s.id + '" data-q="' + esc(ptq.q) + '">Yes, click the parent</button>'
+            + '<button class="btn" data-act="parentno" data-step="' + s.id + '" data-q="' + esc(ptq.q) + '">No, use what I clicked</button>'
+            + "</div></div></div>";
+        }
+      }
+    });
+    h += "</div></div>";
+
+    h += '<div class="field"><label>Watch me (seconds)</label>'
+      + '<input type="number" min="5" max="60" step="5" data-watch-secs="' + s.id + '" value="15" style="width:72px"></div>';
+
     if (s.understanding) {
       var u = s.understanding;
-      h += '<div class="und"><div class="und-h">What I understood '
-        + '<button type="button" class="xbtn" data-act="clear" data-step="' + s.id + '" data-key="understanding">remove</button></div><div class="und-b">'
+      var assumeTxt = (u.assumptions || []).join("\n");
+      h += '<div class="card-sec">' + secHdr("What I understood", s.id, "understanding") + '<div class="sec-b">'
         + '<div class="field"><label>In plain words</label>'
         + '<textarea data-und="' + s.id + '" data-field="plain_summary" rows="3">' + esc(u.plain_summary || "") + "</textarea></div>"
-        + '<div class="field"><label>target</label><input data-und="' + s.id + '" data-field="target" value="' + esc(u.target || "") + '"></div>'
-        + '<div class="field"><label>action</label><input data-und="' + s.id + '" data-field="action" value="' + esc(u.action || "") + '"></div>'
-        + '<div class="field"><label>success when</label><input data-und="' + s.id + '" data-field="success_check" value="' + esc(u.success_check || "") + '"></div>';
+        + '<div class="field"><label>Target</label><input data-und="' + s.id + '" data-field="target" value="' + esc(u.target || "") + '"></div>'
+        + '<div class="field"><label>Action</label><input data-und="' + s.id + '" data-field="action" value="' + esc(u.action || "") + '"></div>'
+        + '<div class="field"><label>Success when</label><input data-und="' + s.id + '" data-field="success_check" value="' + esc(u.success_check || "") + '"></div>'
+        + '<div class="field"><label>Assumptions (one per line)</label>'
+        + '<textarea data-und-assume="' + s.id + '" rows="3">' + esc(assumeTxt) + "</textarea></div>"
+        + '<button type="button" class="xbtn" data-act="clear" data-step="' + s.id + '" data-key="understanding">clear understanding</button>'
+        + "</div></div>";
+    }
+    var caseList = s.cases || [];
+    if (caseList.length) {
+      h += '<div class="card-sec">' + secHdr("Cases", s.id, "cases") + '<div class="sec-b case-list">';
+      caseList.forEach(function (c) {
+        var frame = (c.evidence && c.evidence.frame) || "";
+        var thumb = caseFrameUrl(frame);
+        var stats = caseStatsText(c);
+        var never = !(c.times_matched || 0);
+        h += '<div class="case-row">'
+          + (thumb
+            ? '<img class="case-thumb" src="' + esc(thumb) + '" alt="">'
+            : '<span class="case-thumb empty"></span>')
+          + '<div class="case-body">'
+          + '<p class="case-label">' + esc(caseLabel(c)) + "</p>"
+          + '<p class="case-mono">' + esc(caseTriggerMono(c.trigger)) + "</p>"
+          + '<p class="case-success">Success: ' + esc(caseSuccessText(c)) + "</p>";
+        if (c.halted_at_step) {
+          var seenIdx = (state.steps || []).findIndex(function (x) { return x.id === c.halted_at_step; });
+          if (seenIdx >= 0) {
+            h += '<p class="case-stats warn">seen while step ' + (seenIdx + 1) + " was running</p>";
+          }
+        }
+        h += '<p class="case-stats' + (never ? " warn" : "") + '">' + esc(stats)
+          + (never ? " — may be a fluke worth deleting" : "") + "</p>"
+          + "</div>"
+          + '<div class="case-actions">'
+          + '<button type="button" class="xbtn" data-act="delcase" data-step="' + s.id + '" data-case="' + esc(c.id) + '">remove</button>'
+          + "</div></div>";
+      });
       h += "</div></div>";
     }
-    if (s.status === "understood" || s.status === "demonstrated") {
+    if (s.status === "understood" || s.status === "demonstrated" || s.status === "approved") {
       var mode = state.demoMode[s.id] || "manual";
       h += '<div class="modes">'
         + '<button class="mode" data-mode="manual" data-step="' + s.id + '" aria-pressed="' + (mode !== "replay") + '"><b>I\'ll set the screen up</b><span>Faster when you are already there</span></button>'
@@ -605,32 +958,80 @@
     if (s.reflection) {
       var r = s.reflection;
       var bad = r.matches_understanding === false;
-      h += '<div class="reflect' + (bad ? " bad" : "") + '"><div class="k">'
-        + (bad ? "This does not match what I said" : "What happened") + "</div>"
-        + "<p>" + esc(r.what_i_did || "") + "</p>"
-        + "<p><code>" + esc(r.what_i_observed || "") + "</code></p>"
-        + (bad && r.differences && r.differences.length ? "<p>" + esc(r.differences.join(" · ")) + "</p>" : "")
-        + "</div>";
+      h += '<div class="card-sec' + (bad ? " reflect bad" : "") + '">'
+        + secHdr(bad ? "Does not match — edit & save" : "What happened (demo)", s.id, "reflection")
+        + '<div class="sec-b">'
+        + '<div class="field"><label>What I did</label>'
+        + '<textarea data-ref-did="' + s.id + '" rows="2">' + esc(r.what_i_did || "") + "</textarea></div>"
+        + '<div class="field"><label>What I observed</label>'
+        + '<textarea data-ref-obs="' + s.id + '" rows="2">' + esc(r.what_i_observed || "") + "</textarea></div>";
+      if (bad && r.differences && r.differences.length) {
+        h += '<p class="hint">' + esc(r.differences.join(" · ")) + "</p>";
+      }
+      h += '<button type="button" class="xbtn" data-act="clear" data-step="' + s.id + '" data-key="reflection">clear reflection</button>'
+        + "</div></div>";
     }
+    h += '<div class="save-all-bar">'
+      + '<button type="button" class="btn primary" data-act="saveall" data-step="' + s.id + '">Save all & re-understand</button>'
+      + "</div>";
     h += '<div class="actions">';
-    if (pending.length || pendingItems(s).length) {
+    if (pending.length || pendingQuestions(s).length) {
       h += '<button class="btn primary" data-act="train" data-step="' + s.id + '">Send answers</button>'
-        + '<button class="btn" data-act="show" data-step="' + s.id + '">Show me instead</button>';
+        + '<button class="btn" data-act="show" data-step="' + s.id + '">Show me instead</button>'
+        + '<button class="btn" data-act="watch" data-step="' + s.id + '">Watch me</button>';
     } else if (s.understanding && (s.status === "draft" || s.status === "questioning")) {
-      h += '<button class="btn primary" data-act="okund" data-step="' + s.id + '">Looks right</button>'
-        + '<button class="btn" data-act="rejund" data-step="' + s.id + '">Not quite</button>';
+      var anchorN = (s.anchors && s.anchors.length) ? s.anchors.filter(Boolean).length : (s.anchor ? 1 : 0);
+      var clicksNeeded = s.click_count || 1;
+      var captureDone = anchorN >= clicksNeeded;
+      if (captureDone) {
+        h += '<button class="btn primary" data-act="okund" data-step="' + s.id + '">Looks right</button>'
+          + '<button class="btn" data-act="rejund" data-step="' + s.id + '">Not quite</button>'
+          + '<button class="btn" data-act="show" data-step="' + s.id + '">Show me again</button>';
+      } else {
+        h += '<button class="btn primary" data-act="show" data-step="' + s.id + '">Show me</button>';
+      }
+      h += '<button class="btn" data-act="watch" data-step="' + s.id + '">Watch me</button>';
     } else if (s.status === "draft" || s.status === "questioning") {
       h += '<button class="btn primary" data-act="train" data-step="' + s.id + '">Ask me what you need</button>'
-        + '<button class="btn" data-act="show" data-step="' + s.id + '">Show me on screen</button>';
+        + '<button class="btn" data-act="show" data-step="' + s.id + '">Show me on screen</button>'
+        + '<button class="btn" data-act="watch" data-step="' + s.id + '">Watch me</button>';
     } else if (s.status === "understood") {
       h += '<button class="btn primary" data-act="demo" data-step="' + s.id + '">Demo this step</button>';
     } else if (s.status === "demonstrated") {
       h += '<button class="btn primary" data-act="okbeh" data-step="' + s.id + '">Approve step</button>'
         + '<button class="btn" data-act="demo" data-step="' + s.id + '">Demo again</button>';
+    } else if (s.status === "approved") {
+      h += '<button class="btn" data-act="demo" data-step="' + s.id + '">Demo this step</button>';
     }
     h += '<button class="btn" data-act="delstep" data-step="' + s.id + '">Remove step</button>';
     h += "</div>";
     return h;
+  }
+
+  function pollCaptureResult(id, sinceAt) {
+    var tries = 0;
+    var maxTries = 60;
+    return new Promise(function (resolve) {
+      var timer = setInterval(function () {
+        tries += 1;
+        api("/api/teach?name=" + encodeURIComponent(state.current)).then(function (d) {
+          if (!d || !d.steps) return;
+          var st = d.steps.find(function (x) { return x.id === id; });
+          if (!st || !st.last_capture) return;
+          if (sinceAt && st.last_capture.at === sinceAt) return;
+          clearInterval(timer);
+          applyWf(d);
+          renderSteps();
+          refreshTop();
+          toast(st.last_capture.message || st.last_capture.outcome, st.last_capture.outcome === "saved" ? "ok" : "");
+          resolve(st.last_capture);
+        });
+        if (tries >= maxTries) {
+          clearInterval(timer);
+          resolve(null);
+        }
+      }, 1000);
+    });
   }
 
   function renderSteps() {
@@ -640,10 +1041,12 @@
     wrap.innerHTML = state.steps.map(function (s, i) {
       var uses = (s.consumes && s.consumes.length) ? ("uses " + s.consumes.join(", ")) : "uses nothing";
       if (s.status === "approved") {
+        var actLabel = (s.action && s.action.action) || "step";
+        if ((s.click_count || 1) === 2 || actLabel === "chain") actLabel = "chain (2 clicks)";
         return '<article class="card done">' + spine(s.status)
           + '<div class="chead"><span class="num">' + (i + 1) + '</span><span class="ctitle">'
           + esc(s.user_description) + "</span>" + chip(s.status) + "</div>"
-          + '<div class="summary">' + esc((s.action && s.action.action) || "step") + " · " + esc(uses) + " · verified</div>"
+          + '<div class="summary">' + esc(actLabel) + " · " + esc(uses) + " · verified</div>"
           + '<div class="cbody">' + bodyHtml(s) + "</div></article>";
       }
       return '<article class="card' + (i === ai ? " active" : "") + '">' + spine(s.status)
@@ -654,26 +1057,16 @@
     bindCards();
   }
 
+  function focusTargetStep(stepId) {
+    if (!state.current || !stepId) return Promise.resolve();
+    return api("/api/teach/focus-target", { name: state.current, step_id: stepId }).then(function (d) {
+      if (d.ok) toast("Focused " + (d.title || "target"), "ok");
+      else toast(d.reason || "Could not focus target window", "error");
+      return d;
+    });
+  }
+
   function bindCards() {
-    document.querySelectorAll("[data-desc]").forEach(function (el) {
-      el.onchange = function () { patchStep(el.getAttribute("data-desc"), { description: el.value }); };
-    });
-    document.querySelectorAll("[data-dyn]").forEach(function (el) {
-      el.onchange = function () { patchStep(el.getAttribute("data-dyn"), { varies_note: el.value }); };
-    });
-    document.querySelectorAll("[data-mem]").forEach(function (el) {
-      el.onchange = function () { patchStep(el.getAttribute("data-mem"), { memory_note: el.value }); };
-    });
-    document.querySelectorAll("[data-web]").forEach(function (el) {
-      el.onchange = function () { patchStep(el.getAttribute("data-web"), { web_allowed: el.checked }); };
-    });
-    document.querySelectorAll("[data-und]").forEach(function (el) {
-      el.onchange = function () {
-        var und = {};
-        und[el.getAttribute("data-field")] = el.value;
-        patchStep(el.getAttribute("data-und"), { understanding: und });
-      };
-    });
     document.querySelectorAll("[data-photo]").forEach(function (el) {
       el.onchange = function () { uploadPhoto(el.getAttribute("data-photo"), el.files && el.files[0]); };
     });
@@ -695,11 +1088,13 @@
     if (fields.varies_note !== undefined) s.varies_note = fields.varies_note;
     if (fields.memory_note !== undefined) s.memory_note = fields.memory_note;
     if (fields.web_allowed !== undefined) s.web_allowed = fields.web_allowed;
+    if (fields.click_count !== undefined) s.click_count = fields.click_count;
     return api("/api/teach/patch", {
       name: state.current, step_id: id,
       description: fields.description, varies_note: fields.varies_note,
       memory_note: fields.memory_note, web_allowed: fields.web_allowed,
-      understanding: fields.understanding, clear: fields.clear, drop_photo: fields.drop_photo
+      understanding: fields.understanding, clear: fields.clear, drop_photo: fields.drop_photo,
+      click_count: fields.click_count
     }).then(function (d) { fail(d, "could not save step"); }).catch(function (e) { toast(e.message, "error"); });
   }
 
@@ -800,18 +1195,64 @@
           if (nq) state.pending[id] = [nq];
         });
       });
-    } else if (kind === "show") {
-      toast("Show me is on the left of your screen. Switch to the other app, point at the control, then click it.");
-      p = api("/api/teach/float", { name: name, step_id: id }).then(function (d) {
-        fail(d, "could not open Show me");
-        toast("Show me is on the left of your screen. Switch to the app, point at the control, click Show me.", "ok");
-        var n = 0;
-        var timer = setInterval(function () {
-          n += 1;
-          reloadTeach();
-          if (n >= 20) clearInterval(timer);
-        }, 1500);
+    } else if (kind === "chainone" || kind === "chaintwo" || kind === "chainsumyes") {
+      var qtext2 = btn.getAttribute("data-q") || "";
+      var reply2 = kind === "chainone" ? "yes, set click_count to 1"
+        : (kind === "chaintwo" ? "no, let me show the second click" : "yes");
+      p = api("/api/teach/answer", { name: name, step_id: id, question: qtext2, answer: reply2 }).then(function (d) {
+        fail(d, "answer failed");
       });
+    } else if (kind === "successyes" || kind === "successpart" || kind === "successno") {
+      var qtext3 = btn.getAttribute("data-q") || "";
+      var reply3 = kind === "successyes" ? "yes"
+        : (kind === "successpart" ? "partly: " : "no, it's something else: ");
+      var ansEl = document.querySelector('[data-ans="' + id + '"][data-q="' + CSS.escape(qtext3) + '"]');
+      var typed = ansEl ? ansEl.value.trim() : "";
+      if (kind !== "successyes" && typed) reply3 += typed;
+      p = api("/api/teach/answer", { name: name, step_id: id, question: qtext3, answer: reply3 }).then(function (d) {
+        fail(d, "answer failed");
+      });
+    } else if (kind === "show") {
+      var clkEl = document.querySelector('[data-clicks="' + id + '"]');
+      var ccSel = clkEl ? parseInt(clkEl.value, 10) || 1 : (s.click_count || 1);
+      var isChain = ccSel === 2;
+      var sinceAt = (s.last_capture && s.last_capture.at) || "";
+      toast(isChain
+        ? "Capture bar on the left — after countdown, click Extensions then Apollo (~25s)."
+        : "Capture bar on the left — point at the control, then press Show me.");
+      p = api("/api/teach/float", { name: name, step_id: id, click_count: ccSel }).then(function (d) {
+        fail(d, "could not open capture bar");
+        if ((d.click_count || 1) === 2) {
+          toast("Float bar ready — press Show me (2), then do both clicks.", "ok");
+        }
+        return pollCaptureResult(id, sinceAt);
+      });
+    } else if (kind === "savesec") {
+      var sec = btn.getAttribute("data-sec") || "basics";
+      p = saveStepSection(id, sec);
+    } else if (kind === "saveall" || kind === "savelearned") {
+      var secAll = kind === "savelearned" ? "learned" : "all";
+      p = saveStepSection(id, secAll);
+    } else if (kind === "watch") {
+      var wEl = document.querySelector('[data-watch-secs="' + id + '"]');
+      var secs = 15;
+      if (wEl) secs = Math.max(5, Math.min(60, parseInt(wEl.value, 10) || 15));
+      toast("Watching for " + secs + "s — show me what this step does.", "ok");
+      p = api("/api/teach/capture", { name: name, step_id: id, mode: "watch", seconds: secs }).then(function (d) {
+        fail(d, "watch failed");
+        var msg = (d.last_capture && d.last_capture.message) || (d.learned && d.learned.summary) || d.outcome || "done";
+        toast(msg.slice(0, 120), d.outcome === "saved" ? "ok" : "");
+      });
+    } else if (kind === "dropqa") {
+      p = api("/api/teach/patch", { name: name, step_id: id, drop_qa: [btn.getAttribute("data-q") || ""] });
+    } else if (kind === "dropanchor") {
+      p = api("/api/teach/patch", { name: name, step_id: id, drop_anchor_index: parseInt(btn.getAttribute("data-idx") || "0", 10) });
+    } else if (kind === "dropsub") {
+      p = api("/api/teach/patch", { name: name, step_id: id, drop_sub_click: true });
+    } else if (kind === "clearvaries") {
+      p = api("/api/teach/patch", { name: name, step_id: id, clear: ["varies"] });
+    } else if (kind === "clearnotes") {
+      p = api("/api/teach/patch", { name: name, step_id: id, clear: ["notes"] });
     } else if (kind === "okund") {
       p = api("/api/teach/approve-understanding", { name: name, step_id: id }).then(function (d) {
         fail(d, "could not approve understanding");
@@ -841,9 +1282,14 @@
           fail(prep, "replay failed");
           if (prep.ok === false) throw new Error("replay failed at " + (prep.failed_step || "?") + ": " + (prep.reason || ""));
         });
-      } else if (!window.confirm("Set the screen to where it should be before this step, then click OK when ready.")) {
-        done();
-        return;
+      } else {
+        p = api("/api/teach/float", { name: name, step_id: id, click_count: s.click_count || 1 }).then(function () {
+          return focusTargetStep(id);
+        }).then(function () {
+          if (!window.confirm("The floating helper is available across apps now. Click OK to run the demo when the target app is in front.")) {
+            throw new Error("cancelled");
+          }
+        });
       }
       p = p.then(function () {
         return api("/api/teach/demo", { name: name, step_id: id, mode: mode, test_values: testValues }).then(function (demo) {
@@ -867,6 +1313,33 @@
       p = api("/api/teach/patch", { name: name, step_id: id, drop_photo: btn.getAttribute("data-path") }).then(function (d) {
         fail(d, "could not remove screenshot");
       });
+    } else if (kind === "visionyes" || kind === "visionno") {
+      var vreply = kind === "visionyes" ? "use this target" : "show me again";
+      p = api("/api/teach/answer", { name: name, step_id: id, question: btn.getAttribute("data-q") || "", answer: vreply });
+    } else if (kind === "parentyes" || kind === "parentno") {
+      var preply = kind === "parentyes" ? "yes, click the parent" : "no, use what I clicked";
+      p = api("/api/teach/answer", { name: name, step_id: id, question: btn.getAttribute("data-q") || "", answer: preply });
+    } else if (kind === "caseyes" || kind === "caseno") {
+      var creply = kind === "caseyes" ? "yes, remember it" : "no, one-off";
+      p = api("/api/teach/case-remember", { name: name, step_id: id, answer: creply }).then(function (d) {
+        fail(d, "could not save case answer");
+        if (d.pending_attach) toast("Choose which step this case belongs to", "ok");
+        else toast(d.remembered ? "Case remembered for this step" : "One-off — not remembered", "ok");
+      });
+    } else if (kind === "caseattachyes") {
+      p = api("/api/teach/case-attach", { name: name, halting_step_id: id, answer: "yes" }).then(function (d) {
+        fail(d, "could not attach case");
+        toast("Case attached to step", "ok");
+      });
+    } else if (kind === "caseattachpick") {
+      var sel = document.querySelector('[data-caseattach="' + id + '"]');
+      var targetId = sel ? sel.value : "";
+      p = api("/api/teach/case-attach", {
+        name: name, halting_step_id: id, answer: "attach", target_step_id: targetId
+      }).then(function (d) {
+        fail(d, "could not attach case");
+        toast("Case attached to selected step", "ok");
+      });
     } else if (kind === "witness") {
       p = api("/api/teach/witness", {
         name: name, step_id: id, choice: btn.getAttribute("data-choice") || ""
@@ -880,6 +1353,13 @@
         fail(d, "could not remove step");
         toast("Step removed", "ok");
         return refreshRail();
+      });
+    } else if (kind === "delcase") {
+      var caseId = btn.getAttribute("data-case");
+      if (!window.confirm("Remove case " + caseId + "?")) { done(); return; }
+      p = api("/api/teach/remove-case", { name: name, step_id: id, case_id: caseId }).then(function (d) {
+        fail(d, "could not remove case");
+        toast("Case removed", "ok");
       });
     }
     p.then(reloadTeach).catch(function (e) { toast(e.message, "error"); }).then(done);

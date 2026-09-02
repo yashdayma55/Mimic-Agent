@@ -6,7 +6,7 @@ import os
 from datetime import datetime, timezone
 
 from plan_schema import Plan, PlanNode
-from plan_validator import validate_plan
+from plan_validator import _MAX_TARGET_DESC, validate_plan
 from teaching import TaughtStep, TaughtWorkflow, TeachingError, get_step, save_taught
 
 
@@ -21,9 +21,65 @@ def _bind(text, inputs: dict | None):
     return out
 
 
+def _chain_clicks_from_step(step: TaughtStep) -> list:
+    clicks = []
+    for anc in (step.anchors or []):
+        if not anc:
+            continue
+        primary = (anc or {}).get("primary") or {}
+        clicks.append({
+            "action": "click",
+            "elem_name": primary.get("name"),
+            "elem_type": primary.get("control_type"),
+            "target_desc": primary.get("name") or "target",
+        })
+        if len(clicks) >= 2:
+            break
+    return clicks
+
+
+def _chain_target_desc(clicks: list) -> str:
+    labels = []
+    for click in clicks[:2]:
+        labels.append((click.get("elem_name") or click.get("target_desc") or "target").strip())
+    desc = ", then ".join(labels) if len(labels) > 1 else (labels[0] if labels else "chain")
+    if len(desc) > _MAX_TARGET_DESC:
+        desc = desc[: _MAX_TARGET_DESC - 1].rstrip() + "…"
+    return desc
+
+
 def step_to_node(step: TaughtStep, inputs: dict | None = None) -> PlanNode:
     action = step.action or {}
     kind = action.get("action") or "wait"
+    if kind == "chain":
+        clicks = action.get("clicks") or _chain_clicks_from_step(step)
+        extra = {
+            "clicks": clicks,
+            "anchors": list(step.anchors or []),
+            "click_count": int(getattr(step, "click_count", 1) or 1),
+            "from_taught": step.id,
+        }
+        if getattr(step, "memory_note", ""):
+            extra["memory_note"] = step.memory_note
+        extra["web_allowed"] = bool(getattr(step, "web_allowed", False))
+        first = (step.anchors or [{}])[0] if step.anchors else {}
+        primary = (first or {}).get("primary") or {}
+        win_hint = target_window_hint(step)
+        if win_hint:
+            for click in clicks:
+                click["window_title"] = win_hint
+        extra["target_window_hint"] = win_hint
+        return PlanNode(
+            id=step.id,
+            action="chain",
+            target_desc=_chain_target_desc(clicks),
+            elem_name=primary.get("name"),
+            elem_type=primary.get("control_type"),
+            window_title=win_hint,
+            produces=list(step.produces or []),
+            consumes=list(step.consumes or []),
+            extra=extra,
+        )
     value = action.get("value") or action.get("text") or action.get("keys")
     value = _bind(value, inputs)
     extra = {}
@@ -37,6 +93,10 @@ def step_to_node(step: TaughtStep, inputs: dict | None = None) -> PlanNode:
     extra["from_taught"] = step.id
     if step.anchor:
         extra["anchor"] = step.anchor
+    if getattr(step, "anchors", None):
+        extra["anchors"] = step.anchors
+    if getattr(step, "click_count", 1):
+        extra["click_count"] = int(step.click_count or 1)
     if getattr(step, "memory_note", ""):
         extra["memory_note"] = step.memory_note
     extra["web_allowed"] = bool(getattr(step, "web_allowed", False))
@@ -169,6 +229,52 @@ def prepare_state(wf: TaughtWorkflow, step_id: str, mode: str, test_values: dict
     }
 
 
+def target_window_hint(step: TaughtStep) -> str | None:
+    after = getattr(step, "after_frame", None) or {}
+    title = (after.get("window_title") or "").strip()
+    if title and title.lower() not in ("extensions",):
+        return title
+    und = step.understanding or {}
+    check = (und.get("success_evidence") or {}).get("check") or {}
+    title = (check.get("expected") or "").strip()
+    if title:
+        return title
+    for anc in step.anchors or []:
+        ss = (anc or {}).get("structural_state") or {}
+        ft = (ss.get("foreground_title") or "").strip()
+        if ft and ft.lower() not in ("extensions",):
+            return ft
+    blob = (step.user_description or "").lower()
+    if "linkedin" in blob:
+        return "LinkedIn"
+    if "notepad" in blob:
+        return "Notepad"
+    return None
+
+
+def window_hint_from_step(step: TaughtStep) -> str | None:
+    anchors = [a for a in (step.anchors or []) if a]
+    if anchors:
+        pt = anchors[0].get("point")
+        if isinstance(pt, (list, tuple)) and len(pt) == 2:
+            from app_ui_guard import is_own_window, window_title_at_point
+
+            title = window_title_at_point(int(pt[0]), int(pt[1]))
+            if title and not is_own_window(title) and title.lower() not in ("extensions",):
+                return title
+    return target_window_hint(step)
+
+
+def focus_step_target(wf: TaughtWorkflow, step_id: str) -> dict:
+    step = get_step(wf, step_id)
+    hint = window_hint_from_step(step)
+    if not hint:
+        return {"ok": False, "reason": "no target window recorded for this step — set up the screen manually"}
+    from ui_runner import focus_window_by_hint
+
+    return focus_window_by_hint(hint)
+
+
 def demo_taught_step(wf: TaughtWorkflow, step_id: str, test_values: dict | None = None, mode: str = "manual") -> dict:
     """Run only this step. Status becomes demonstrated only on observed success."""
     import os_input
@@ -194,8 +300,58 @@ def demo_taught_step(wf: TaughtWorkflow, step_id: str, test_values: dict | None 
         step.demo = result
         save_taught(wf)
         return result
+    focus_result = None
+    before_demo = None
+    after_demo = None
+    if (mode or "manual").strip().lower() == "manual":
+        from success_signals import snapshot_structural_state
+
+        before_demo = snapshot_structural_state()
+        focus_result = focus_step_target(wf, step_id)
+    from case_match import default_vision_match, plan_step_execution
+    from step_cases import list_step_cases
+
+    vision_fn = default_vision_match if list_step_cases(step) else None
+    exec_plan = plan_step_execution(
+        wf, step, test_values, before_demo=before_demo, vision_fn=vision_fn,
+    )
+    if exec_plan["action"] == "halt_ambiguous":
+        from case_halt_loop import record_case_ambiguity_halt
+
+        halt_info = record_case_ambiguity_halt(
+            wf,
+            step_id,
+            exec_plan.get("candidates") or [],
+            structural=exec_plan.get("structural"),
+            log=exec_plan.get("log") or "",
+        )
+        result = {
+            "ok": False,
+            "reason": "ambiguous case match — halting for user",
+            "observed": None,
+            "os_input_calls": 0,
+            "mode": mode,
+            "case_decision": exec_plan.get("log"),
+            "case_halt": halt_info,
+            "ts": datetime.now(timezone.utc).isoformat(),
+        }
+        if focus_result is not None:
+            result["focus"] = focus_result
+        step.demo = result
+        save_taught(wf)
+        return result
     before = os_input.call_count()
-    out = run_verified_plan([node.to_runner_step()], halt_on_fail=True)
+    matched_case = exec_plan.get("case") if exec_plan["action"] == "case" else None
+    if matched_case is not None:
+        from step_cases import record_case_match
+
+        record_case_match(matched_case)
+        save_taught(wf)
+    out = run_verified_plan([exec_plan["runner_step"]], halt_on_fail=True)
+    if before_demo is not None:
+        from success_signals import snapshot_structural_state
+
+        after_demo = snapshot_structural_state()
     ok = bool(out.get("ok"))
     reason = out.get("reason")
     if out.get("results"):
@@ -203,17 +359,68 @@ def demo_taught_step(wf: TaughtWorkflow, step_id: str, test_values: dict | None 
         observed = out["results"][-1].value_after
     else:
         observed = None
+    from success_signals import verify_success_check
+
+    if matched_case is not None:
+        from case_match import verify_case_success
+
+        v = verify_case_success(
+            matched_case,
+            wf.name,
+            before_demo=before_demo,
+            after_demo=after_demo,
+            os_input_calls=os_input.call_count() - before,
+        )
+    else:
+        v = verify_success_check(
+            step,
+            wf.name,
+            before_demo=before_demo,
+            after_demo=after_demo,
+            os_input_calls=os_input.call_count() - before,
+        )
+    calls = os_input.call_count() - before
+    cc = int(getattr(step, "click_count", 1) or 1)
+    action = (step.action or {}).get("action") or ""
+    if ok and action == "chain" and calls < cc:
+        ok = False
+        reason = f"demo reported success but sent {calls} of {cc} required click(s)"
+    if v.get("ok") is False:
+        ok = False
+        reason = v.get("reason") or reason
+        observed = v.get("actual") or observed
+    elif v.get("ok") is True:
+        observed = v.get("reason") or observed
     result = {
         "ok": ok,
         "reason": reason,
         "observed": observed,
+        "success_verify": v,
         "os_input_calls": os_input.call_count() - before,
         "mode": mode,
         "ts": datetime.now(timezone.utc).isoformat(),
+        "case_decision": exec_plan.get("log"),
     }
+    if matched_case is not None:
+        result["case_id"] = matched_case.id
+    if focus_result is not None:
+        result["focus"] = focus_result
+    if mode == "manual" and getattr(step, "expected_start_frame", None):
+        result["expected_start_frame"] = step.expected_start_frame
     step.demo = result
     if ok:
-        step.status = "demonstrated"
+        if step.status != "approved":
+            step.status = "demonstrated"
+        step.edit_notice = None
+    else:
+        try:
+            from case_halt_loop import maybe_record_demo_halt
+
+            halt_info = maybe_record_demo_halt(wf, step, result)
+            if halt_info:
+                result["case_halt"] = halt_info
+        except Exception:
+            pass
     save_taught(wf)
     return result
 

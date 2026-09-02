@@ -205,6 +205,85 @@ def find_window(hint: str):
     return None, None
 
 
+def find_any_window(hint: str):
+    """Like find_window but includes Chrome/Edge and skips MimicAgent UI."""
+    if not hint:
+        return None, None
+    from app_ui_guard import is_own_window
+
+    h = hint.strip().lower()
+    if h in ("taskbar", "shell_traywnd"):
+        return find_window(hint)
+
+    exact: list[tuple] = []
+    partial: list[tuple] = []
+    for w in _all_windows():
+        try:
+            if not w.is_visible():
+                continue
+            title = _title(w)
+            if not title or is_own_window(title):
+                continue
+            proc = _proc_name(w)
+            tl = title.lower()
+            if tl == h:
+                exact.append((w, title, proc))
+            elif h in tl:
+                partial.append((w, title, proc))
+        except Exception:
+            continue
+
+    def _pick(candidates: list[tuple]):
+        if not candidates:
+            return None, None
+        if "linkedin" in h or "chrome" in h:
+            for w, title, proc in candidates:
+                if proc == "chrome.exe":
+                    return w, title
+        return candidates[0][0], candidates[0][1]
+
+    win, title = _pick(exact)
+    if win is not None:
+        return win, title
+    win, title = _pick(partial)
+    if win is not None:
+        return win, title
+
+    if "linkedin" in h:
+        for w in _all_windows():
+            try:
+                if not w.is_visible():
+                    continue
+                title = _title(w)
+                if not title or is_own_window(title):
+                    continue
+                tl = title.lower()
+                if "linkedin" in tl and _proc_name(w) == "chrome.exe":
+                    return w, title
+            except Exception:
+                continue
+    return None, None
+
+
+def focus_window_by_hint(hint: str) -> dict:
+    """Bring a target window to the foreground. Returns {ok, title, reason}."""
+    win, title = find_any_window(hint)
+    if win is None:
+        return {
+            "ok": False,
+            "title": None,
+            "reason": f"could not find a window matching {hint!r} — is the app open?",
+        }
+    if not focus_window(win):
+        return {
+            "ok": False,
+            "title": title,
+            "reason": f"found {title!r} but could not focus it",
+        }
+    fg = foreground_title()
+    return {"ok": True, "title": title, "foreground": fg, "reason": f"focused {title!r}"}
+
+
 def focus_window(wrapper) -> bool:
     try:
         wrapper.set_focus()
@@ -351,11 +430,20 @@ def _titles_match(wanted: str | None, actual: str | None) -> bool:
     return wanted.strip().lower() in actual.strip().lower()
 
 
+def _execute_chain(step: dict, last_window: str | None = None) -> "StepResult":
+    from chain_exec import execute_chain_step
+
+    return execute_chain_step(step, last_window)
+
+
 def execute_step(step: dict, last_window: str | None = None) -> StepResult:
     kind = (step.get("kind") or "").strip().lower()
     action = (step.get("action") or "").strip().lower()
     if kind == "reason" or action in ("reason", "", "none"):
         return StepResult(ok=True, reason="reason step (no UI action)")
+
+    if action == "chain":
+        return _execute_chain(step, last_window)
 
     wanted = infer_window_title(step, last_window)
     result = StepResult(ok=False, reason="", window_wanted=wanted)
