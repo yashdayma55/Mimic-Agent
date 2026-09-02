@@ -130,16 +130,83 @@ _ADAPTERS = {
 def ask_vision_api(image_bytes, api_key, provider=None):
     """Send the image to whichever provider the key belongs to.
     Returns normalized {found, what_you_see, confidence}."""
+    return ask_vision_with_prompt(image_bytes, api_key, PROMPT, provider=provider)
+
+
+def ask_vision_with_prompt(image_bytes, api_key, prompt: str, provider=None):
+    """Vision call with a custom prompt; returns parsed JSON dict."""
     provider = provider or detect_provider(api_key)
     if provider not in _ADAPTERS:
-        return {"found": False, "what_you_see": f"unknown provider for this key", "confidence": "low"}
+        return {"found": False, "what_you_see": "unknown provider for this key", "confidence": "low"}
     try:
-        raw = _ADAPTERS[provider](image_bytes, api_key)
+        raw = _ask_with_prompt(image_bytes, api_key, prompt, provider)
         result = _parse(raw)
         result["provider"] = provider
         return result
     except Exception as e:
         return {"found": False, "what_you_see": f"api error: {e}", "confidence": "low"}
+
+
+def _ask_with_prompt(image_bytes, api_key, prompt: str, provider: str) -> str:
+    b64 = base64.b64encode(image_bytes).decode()
+    if provider == "claude":
+        resp = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": "claude-sonnet-4-5",
+                "max_tokens": 300,
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64}},
+                        {"type": "text", "text": prompt},
+                    ],
+                }],
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return resp.json()["content"][0]["text"]
+    if provider == "openai":
+        resp = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={
+                "model": "gpt-4o",
+                "max_tokens": 300,
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                    ],
+                }],
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"]
+    if provider == "gemini":
+        resp = requests.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}",
+            json={
+                "contents": [{
+                    "parts": [
+                        {"text": prompt},
+                        {"inline_data": {"mime_type": "image/png", "data": b64}},
+                    ],
+                }],
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+    raise ValueError(f"unsupported provider {provider}")
 
 
 if __name__ == "__main__":
