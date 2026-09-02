@@ -62,15 +62,13 @@ def part1():
 
 
 def part2():
-    print("=== PART 2 conflict becomes a question ===")
+    print("=== PART 2 cascade (no witness voting) ===")
     from teach_loop import (
         add_step,
         apply_show_witnesses,
-        approve_understanding,
-        choose_witness,
         set_context,
     )
-    from teaching import TaughtWorkflow, TeachingError, get_step
+    from teaching import TaughtWorkflow, get_step
 
     name = "_wit_conflict"
     wd = os.path.join("workflows", name)
@@ -79,54 +77,35 @@ def part2():
     wf = TaughtWorkflow(name=name)
     set_context(wf, "apollo")
     s = add_step(wf, "click Apollo")
-    s.anchor = {
+    resolution = {
+        "source": "a11y",
+        "reason": "structural pipeline saw the element",
         "witnesses": {
             "a11y": {
                 "saw": True,
                 "name": "Apollo.io",
                 "control_type": "Button",
-                "rect": [0, 0, 50, 20],
-                "parent_path": "/Pane/Menu",
                 "account": "a Button named 'Apollo.io' inside /Pane/Menu.",
-                "confidence": "high",
             },
-            "dom": {"saw": False, "account": "not page content — nothing here.", "confidence": "low"},
+            "dom": {"saw": False, "account": "saw nothing"},
             "vision": {
                 "saw": True,
-                "rect": [240, 0, 290, 20],
-                "account": "a small coloured icon, third item in a dropdown, below 'Manage extensions'.",
-                "confidence": "medium",
+                "account": "a small coloured icon, third item in a dropdown.",
             },
         },
-        "agreement": "conflict",
-        "conflict_note": "a11y and vision 240px apart",
+        "primary": {"name": "Apollo.io", "control_type": "Button", "pipeline": "a11y"},
+        "confirmation": {"confirmed_by_vision": True},
+        "resolution_line": "resolved by a11y · confirmed by vision",
     }
     from teaching import save_taught
     save_taught(wf)
-    out = apply_show_witnesses(wf, s.id, {"witnesses": {
-        "witnesses": s.anchor["witnesses"],
-        "agreement": "conflict",
-        "conflict_note": s.anchor["conflict_note"],
-    }})
+    apply_show_witnesses(wf, s.id, {"resolution": resolution, "witnesses": resolution})
     step = get_step(wf, s.id)
-    _pass("status questioning", step.status == "questioning", step.status)
     qs = [q for q in step.qa_history if q.get("kind") == "witness_conflict"]
-    _pass("exactly one disambiguation question", len(qs) == 1, str(len(qs)))
-    qtext = qs[0]["q"]
-    _pass("question has a11y account", "Apollo.io" in qtext, qtext)
-    _pass("question has vision account", "coloured icon" in qtext or "colored icon" in qtext, qtext)
-    try:
-        approve_understanding(wf, s.id)
-        _pass("approve blocked while unresolved", False)
-    except TeachingError as e:
-        _pass("approve_understanding raises", "conflict" in str(e).lower(), str(e))
-    choose_witness(wf, s.id, "a11y")
-    step = get_step(wf, s.id)
-    _pass("primary is a11y", (step.anchor.get("primary") or {}).get("pipeline") == "a11y", str(step.anchor.get("primary")))
-    _pass("fallbacks present", bool(step.anchor.get("fallbacks")), str(step.anchor.get("fallbacks"))[:80])
-    reason = step.anchor.get("primary_reason") or ""
-    _pass("primary_reason mentions user and disagree", "user" in reason and "disagree" in reason, reason)
-    _pass("conflict resolved", step.anchor.get("conflict_unresolved") is False)
+    _pass("no witness conflict question", len(qs) == 0, str(len(qs)))
+    _pass("primary is a11y", (step.anchors[0].get("primary") or {}).get("pipeline") == "a11y")
+    _pass("resolution line set", "resolved by a11y" in (step.anchors[0].get("resolution_line") or ""))
+    _pass("conflict never unresolved", step.anchors[0].get("conflict_unresolved") is False)
 
 
 def part3():
