@@ -197,22 +197,77 @@ def remove_step_case_with_evidence(step: TaughtStep, case_id: str, wf_name: str)
     return removed
 
 
+def case_number(case: StepCase) -> int:
+    raw = str(case.id or "").strip().lower()
+    if raw.startswith("c") and raw[1:].isdigit():
+        return int(raw[1:])
+    return 0
+
+
+def case_card_title(case: StepCase) -> str:
+    n = case_number(case)
+    return f"Case {n}" if n else "Case"
+
+
 def case_short_label(case: StepCase) -> str:
+    return case_situation_text(case)[:100]
+
+
+def case_situation_text(case: StepCase) -> str:
     trigger = case.trigger or {}
     desc = (trigger.get("description") or "").strip()
     if desc:
-        return desc[:100]
+        return desc
     title = (trigger.get("foreground_title") or "").strip()
+    parts: list[str] = []
     if title:
-        return f"a {title} screen appears"
+        parts.append(f"When a {title} window is showing")
     elems = trigger.get("a11y_present") or []
-    if elems and (elems[0].get("name") or "").strip():
-        return f"{elems[0]['name']!r} is on screen"
+    names = [(el.get("name") or "").strip() for el in elems if (el.get("name") or "").strip()]
+    if names:
+        if parts:
+            parts.append(f"and {names[0]!r} is visible on screen")
+        else:
+            parts.append(f"When {names[0]!r} is on screen")
+    url = (trigger.get("browser_url") or "").strip()
+    if url and not parts:
+        parts.append(f"When the browser is on {url}")
+    if parts:
+        return " ".join(parts)
     sc = case.success_check or {}
     text = (sc.get("text") or sc.get("detail") or "").strip()
     if text:
         return text[:100]
     return f"case {case.id}"
+
+
+def format_case_resolution(resolution: dict | None, case: StepCase | None = None) -> str:
+    res = dict(resolution or {})
+    action = (res.get("action") or "").strip()
+    if case is not None:
+        sub = ((case.sub_step or {}).get("user_description") or "").strip()
+        if sub:
+            if action and action.lower() not in sub.lower():
+                return f"{action} {sub}"
+            return sub
+    if action == "chain":
+        clicks = res.get("clicks") or []
+        parts: list[str] = []
+        for click in clicks:
+            name = (click.get("elem_name") or click.get("name") or "element").strip()
+            parts.append(f"click {name}")
+        return ", then ".join(parts) if parts else "chain of clicks"
+    target = (
+        res.get("elem_name")
+        or res.get("text")
+        or res.get("summary")
+        or ""
+    ).strip()
+    if action and target:
+        return f"{action} {target}"
+    if action:
+        return action
+    return "—"
 
 
 def format_trigger_mono(trigger: dict | None) -> str:
@@ -279,10 +334,21 @@ def case_row_display(case: StepCase) -> dict:
     check = sc.get("check") or {}
     if not success and check.get("type"):
         success = str(check.get("expected") or check.get("text") or check.get("type"))
+    situation = case_situation_text(case)
+    resolution = format_case_resolution(case.resolution, case)
+    recognise_by = format_trigger_mono(case.trigger)
+    if situation and recognise_by.startswith("desc:" + situation):
+        recognise_by = format_trigger_mono({
+            k: v for k, v in (case.trigger or {}).items() if k != "description"
+        })
     return {
         "id": case.id,
+        "title": case_card_title(case),
         "label": case_short_label(case),
-        "trigger_mono": format_trigger_mono(case.trigger),
+        "situation": situation,
+        "resolution": resolution,
+        "recognise_by": recognise_by,
+        "trigger_mono": recognise_by,
         "success_check": success or "—",
         "stats": format_case_stats(case),
         "never_matched": int(case.times_matched or 0) <= 0,

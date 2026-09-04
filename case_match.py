@@ -66,11 +66,14 @@ def _format_match_log(case: StepCase, match: dict) -> str:
     reason = (match.get("reason") or "").strip()
     if tier == 2:
         detail = f"vision, confidence {match.get('confidence')}"
-    elif tier == "described":
+    elif tier in ("described", "live_desc"):
         detail = reason or "description match"
     else:
         detail = reason or "structural trigger"
-    tier_label = f"Tier {tier}" if tier != "described" else "description"
+    if tier in ("described", "live_desc"):
+        tier_label = "description"
+    else:
+        tier_label = f"Tier {tier}"
     return f"case {case.id} matched ({origin} · {tier_label}: {detail})"
 
 
@@ -80,7 +83,15 @@ def _attach_log(case: StepCase, match: dict) -> dict:
     return out
 
 
+def _trigger_description(case: StepCase) -> str:
+    return ((case.trigger or {}).get("description") or "").strip()
+
+
 def _case_description(case: StepCase) -> str:
+    """Prefer when-this-applies text; fall back to success / evidence labels."""
+    desc = _trigger_description(case)
+    if desc:
+        return desc
     sc = case.success_check or {}
     text = (sc.get("text") or sc.get("detail") or "").strip()
     if text:
@@ -90,6 +101,17 @@ def _case_description(case: StepCase) -> str:
     if title:
         return title
     return f"case {case.id}"
+
+
+def case_is_runnable(case: StepCase) -> bool:
+    """Approved / demonstrated cases (or legacy cases without sub_step status)."""
+    sub = case.sub_step or {}
+    status = (sub.get("status") or "").strip().lower()
+    if status in ("", "approved", "demonstrated"):
+        return True
+    if case.resolution or (sub.get("action") and status != "draft"):
+        return status != "draft"
+    return False
 
 
 def _tier1_case_match(case: StepCase, structural: dict) -> dict | None:
@@ -193,14 +215,15 @@ def _tier2_case_match(
     })
 
 
-def _described_case_match(
+def _live_description_match(
     case: StepCase,
     live_screen: bytes | None,
     vision_fn: VisionFn | None,
+    *,
+    tier: str = "described",
 ) -> dict | None:
-    if _origin_label(case) != CASE_ORIGIN_USER_DESCRIBED:
-        return None
-    description = ((case.trigger or {}).get("description") or "").strip()
+    """Match trigger.description against the live screen (not the stored case frame)."""
+    description = _trigger_description(case)
     if not description:
         return None
     if vision_fn is None or not live_screen:
@@ -214,10 +237,20 @@ def _described_case_match(
     return _attach_log(case, {
         "case_id": case.id,
         "case": case,
-        "tier": "described",
+        "tier": tier,
         "confidence": conf,
         "reason": f"description {description!r}",
     })
+
+
+def _described_case_match(
+    case: StepCase,
+    live_screen: bytes | None,
+    vision_fn: VisionFn | None,
+) -> dict | None:
+    if _origin_label(case) != CASE_ORIGIN_USER_DESCRIBED:
+        return None
+    return _live_description_match(case, live_screen, vision_fn, tier="described")
 
 
 def _capture_live_screen(wf_name: str) -> bytes | None:
@@ -258,7 +291,28 @@ def evaluate_case_match(
     tier1 = _tier1_case_match(case, structural)
     if tier1:
         return tier1
+    # Description / halt_signature cases must match the LIVE screen, not the stored frame.
+    if not has_structural_trigger(case.trigger) and _trigger_description(case):
+        live = _live_description_match(
+            case, live_screen, vision_fn, tier="live_desc",
+        )
+        if live:
+            return live
+        # Do not fall through to tier-2 on the stored frame — that ignores current UI.
+        if (case.trigger or {}).get("halt_signature"):
+            return None
     return _tier2_case_match(case, structural, wf_name, vision_fn)
+
+
+def _case_needs_live_screen(case: StepCase) -> bool:
+    if _origin_label(case) == CASE_ORIGIN_USER_DESCRIBED:
+        return True
+    if _trigger_description(case):
+        return True
+    tr = case.trigger or {}
+    if tr.get("halt_signature") and not has_structural_trigger(tr):
+        return True
+    return False
 
 
 def decide_step_cases(
@@ -270,12 +324,15 @@ def decide_step_cases(
     live_screen: bytes | None = None,
 ) -> dict:
     """Decide whether to run a case, the normal path, or halt on ambiguity."""
-    cases = list_step_cases(step)
+    cases = [c for c in list_step_cases(step) if case_is_runnable(c)]
     if not cases:
+        all_cases = list_step_cases(step)
+        if all_cases:
+            return {"action": "normal", "log": "no runnable (approved) cases on step", "candidates": []}
         return {"action": "normal", "log": "no cases on step", "candidates": []}
 
     screen = live_screen
-    if screen is None and any(_origin_label(c) == CASE_ORIGIN_USER_DESCRIBED for c in cases):
+    if screen is None and any(_case_needs_live_screen(c) for c in cases):
         screen = _capture_live_screen(wf_name)
 
     candidates: list[dict] = []
@@ -319,6 +376,73 @@ def decide_step_cases(
         "log": "no case matched — normal path",
         "candidates": [],
     }
+
+
+def looks_like_blocker_extract_failure(reason: str | None, observed: str | None = None) -> bool:
+    """True when the main extract failed because the blocker screen is up (e.g. Access email)."""
+    text = f"{reason or ''} {observed or ''}".lower()
+    if "vision did not find a visible email" in text:
+        return True
+    if "no email" in text and ("access email" in text or "visible" in text):
+        return True
+    if "access email" in text and ("no actual email" in text or "not visible" in text or "no email" in text):
+        return True
+    return False
+
+
+def pick_case_after_blocker_failure(
+    step: TaughtStep,
+    structural: dict,
+    wf_name: str,
+    *,
+    reason: str | None = None,
+    observed: str | None = None,
+    vision_fn: VisionFn | None = None,
+    live_screen: bytes | None = None,
+) -> dict | None:
+    """After a no-email extract failure, choose an approved case to run then continue."""
+    if not looks_like_blocker_extract_failure(reason, observed):
+        return None
+    cases = [c for c in list_step_cases(step) if case_is_runnable(c)]
+    if not cases:
+        return None
+    screen = live_screen
+    if screen is None and any(_case_needs_live_screen(c) for c in cases):
+        screen = _capture_live_screen(wf_name)
+    decision = decide_step_cases(
+        step, structural, wf_name, vision_fn=vision_fn, live_screen=screen,
+    )
+    if decision.get("action") == "case" and decision.get("case"):
+        return {
+            "case": decision["case"],
+            "log": decision.get("log") or "blocker failure → matched case",
+            "how": "match",
+        }
+    # Easy path: one taught blocker case on this extract step → just use it.
+    if len(cases) == 1:
+        case = cases[0]
+        return {
+            "case": case,
+            "log": (
+                f"case {case.id} used after extract blocker "
+                f"({_trigger_description(case) or 'only approved case'})"
+            ),
+            "how": "single_case",
+        }
+    # Prefer cases whose when-applies mentions no-email / Access email.
+    keyed = []
+    for c in cases:
+        desc = _trigger_description(c).lower()
+        if any(k in desc for k in ("no email", "access email", "blocked", "not visible", "reveal")):
+            keyed.append(c)
+    if len(keyed) == 1:
+        case = keyed[0]
+        return {
+            "case": case,
+            "log": f"case {case.id} used after extract blocker (when-applies fit)",
+            "how": "description_heuristic",
+        }
+    return None
 
 
 def resolution_to_runner_step(step_id: str, resolution: dict) -> dict:
@@ -407,19 +531,31 @@ def plan_step_execution(
 
     structural = before_demo or snapshot_structural_state()
     screen = live_screen
-    if screen is None and any(
-        _origin_label(c) == CASE_ORIGIN_USER_DESCRIBED for c in list_step_cases(step)
-    ):
+    if screen is None and any(_case_needs_live_screen(c) for c in list_step_cases(step)):
         screen = _capture_live_screen(wf.name)
     decision = decide_step_cases(
         step, structural, wf.name, vision_fn=vision_fn, live_screen=screen,
     )
     if decision["action"] == "case":
         case = decision["case"]
+        from case_steps import case_continue_with_parent, case_to_runner_steps
+
+        runners = case_to_runner_steps(case, step.id)
+        for r in runners:
+            r["workflow_name"] = wf.name
+        continue_parent = case_continue_with_parent(case)
+        parent_runner = None
+        if continue_parent:
+            parent_node = step_to_node(step, test_values)
+            parent_runner = parent_node.to_runner_step()
+            parent_runner["workflow_name"] = wf.name
         return {
             "action": "case",
             "case": case,
-            "runner_step": resolution_to_runner_step(step.id, case.resolution),
+            "runner_step": runners[0] if runners else resolution_to_runner_step(step.id, case.resolution),
+            "runner_steps": runners,
+            "continue_parent": continue_parent,
+            "parent_runner_step": parent_runner,
             "log": decision["log"],
             "decision": decision,
             "structural": structural,

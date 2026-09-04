@@ -534,7 +534,11 @@ def record_case_ambiguity_halt(
 
 
 def maybe_record_demo_halt(wf: TaughtWorkflow, step: TaughtStep, demo_result: dict) -> dict | None:
-    """Record a halt when demo fails. Does not retry."""
+    """Record a halt when demo fails in a way that may need a new case.
+
+    Title / success-check misses on already-taught steps are ordinary demo
+    failures — do not force the user to re-approve the step.
+    """
     if demo_result.get("ok"):
         return None
     if step.case_halt and not step.case_halt.get("resolution"):
@@ -547,6 +551,21 @@ def maybe_record_demo_halt(wf: TaughtWorkflow, step: TaughtStep, demo_result: di
             "needs_resolution": True,
         }
     reason = (demo_result.get("reason") or "demo failed").strip()
+    low = reason.lower()
+    taught = bool(step.anchors) or (getattr(step, "method", "") or "").strip().lower() == "prompt"
+    titleish = any(
+        k in low
+        for k in (
+            "window title",
+            "foreground title",
+            "still '",
+            "expected the window",
+            "success check",
+            "could not verify",
+        )
+    )
+    if taught and titleish and "visible email" not in low and "access email" not in low:
+        return None
     observed = (demo_result.get("observed") or reason).strip()
     before = demo_result.get("success_verify") or {}
     if isinstance(before, dict) and before.get("actual"):
@@ -558,6 +577,26 @@ def maybe_record_demo_halt(wf: TaughtWorkflow, step: TaughtStep, demo_result: di
         observed=observed,
         structural=demo_result.get("before_demo"),
     )
+
+
+def dismiss_case_halt(wf: TaughtWorkflow, step_id: str, *, restore_status: str | None = None) -> dict:
+    """Clear an unexpected-screen halt without re-teaching the step."""
+    step = get_step(wf, step_id)
+    if not step.case_halt:
+        return {"ok": True, "cleared": False, "step": step.to_dict()}
+    step.case_halt = None
+    if restore_status:
+        step.status = restore_status
+    elif step.status == "understood" and (step.anchors or (step.method or "") == "prompt"):
+        # Keep the step usable; user already taught it.
+        if step.demo and step.demo.get("ok"):
+            step.status = "demonstrated"
+        else:
+            step.status = "approved" if step.understanding else "understood"
+            if step.understanding and (step.anchors or step.action):
+                step.status = "approved"
+    save_taught(wf)
+    return {"ok": True, "cleared": True, "step": step.to_dict()}
 
 
 def halt_status(step: TaughtStep) -> dict | None:
