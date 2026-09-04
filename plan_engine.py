@@ -18,7 +18,13 @@ def execute_validated_plan(plan, *, halt_on_fail: bool = True) -> dict:
             "reason": violations[0]["message"],
             "results": [],
         }
-    steps = [n.to_runner_step() for n in plan.nodes if n.action not in ("done", "stuck", "prompt")]
+    steps = [n.to_runner_step() for n in plan.nodes if n.action not in ("done", "stuck")]
+    for n, s in zip(
+        [n for n in plan.nodes if n.action not in ("done", "stuck")],
+        steps,
+    ):
+        if n.action == "prompt":
+            s.setdefault("produces", list(n.produces or []))
     out = run_verified_plan(steps, halt_on_fail=halt_on_fail)
     out["executed"] = True
     out["violations"] = []

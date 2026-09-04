@@ -63,8 +63,17 @@ def hotkey(combo: str) -> None:
     send_keys(keys)
 
 
-def press(key: str) -> None:
-    _record("press", key=key)
-    from pywinauto.keyboard import send_keys
+def move_to(x: int, y: int) -> None:
+    _record("move", x=int(x), y=int(y))
+    import pyautogui
 
-    send_keys("{" + str(key).upper() + "}")
+    pyautogui.FAILSAFE = False
+    pyautogui.moveTo(int(x), int(y))
+
+
+def scroll_at(x: int, y: int, clicks: int) -> None:
+    _record("scroll", x=int(x), y=int(y), clicks=int(clicks))
+    import pyautogui
+
+    pyautogui.FAILSAFE = False
+    pyautogui.scroll(int(clicks), x=int(x), y=int(y))

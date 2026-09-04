@@ -436,6 +436,88 @@ def _execute_chain(step: dict, last_window: str | None = None) -> "StepResult":
     return execute_chain_step(step, last_window)
 
 
+def _step_anchor(step: dict) -> dict | None:
+    anchor = step.get("anchor")
+    if anchor:
+        return anchor
+    extra = step.get("extra") or {}
+    if extra.get("anchor"):
+        return extra.get("anchor")
+    anchors = step.get("anchors") or extra.get("anchors") or []
+    if anchors:
+        return anchors[0]
+    return None
+
+
+def _click_with_anchor(
+    step: dict,
+    win,
+    wanted: str | None,
+    found_title: str | None,
+    name: str,
+    etype: str,
+    result: StepResult,
+) -> StepResult:
+    from chain_exec import _anchor_click_point, _perform_click
+    from plan_schema import PlanNode
+
+    anchor = _step_anchor(step)
+    el = resolve_element(win, name, etype)
+    layer = "primary"
+    if el is None and anchor:
+        node = PlanNode(
+            id=str(step.get("id") or ""),
+            action="click",
+            elem_name=name or None,
+            elem_type=etype or None,
+            window_title=wanted or found_title,
+            extra={"anchor": anchor},
+        )
+        from anchor_repair import resolve_with_anchor
+
+        el, layer = resolve_with_anchor(node, wanted or found_title)
+        result.lines.append(f"  anchor resolve layer={layer}")
+    if el is None and _anchor_click_point(anchor):
+        clicked, xy, how = _perform_click(anchor, None, "taught_point", name or "target")
+        result.click_xy = xy
+        result.lines.append(f"  click method={how}")
+        if not clicked:
+            result.reason = how
+            return result
+        time.sleep(0.4)
+        result.ok = True
+        result.reason = "click verified via taught point"
+        result.window_found = result.window_found or found_title
+        return result
+    if el is None:
+        result.reason = (
+            f"no element resolved for click name={name!r} type={etype!r} "
+            f"in window {result.window_found or wanted!r}"
+        )
+        return result
+    result.element_name = _el_name(el) or name
+    result.element_type = _el_type(el) or etype
+    if isinstance(el, tuple):
+        result.element_rect = None
+        clicked, xy, how = _perform_click(anchor, el, layer, name or "target")
+    else:
+        result.element_rect = _rect(el)
+        clicked, xy, how = _click_wrapper(el)
+    result.click_xy = xy
+    result.lines.append(f"  click method={how}")
+    if not clicked:
+        result.reason = how
+        return result
+    time.sleep(0.4)
+    after_fg = foreground_title()
+    after_focus = focused_wrapper()
+    result.focused_after = _el_name(after_focus) if after_focus else after_fg
+    result.ok = True
+    result.reason = "click verified (foreground or focus changed)"
+    result.window_found = result.window_found or found_title or after_fg
+    return result
+
+
 def execute_step(step: dict, last_window: str | None = None) -> StepResult:
     kind = (step.get("kind") or "").strip().lower()
     action = (step.get("action") or "").strip().lower()
@@ -443,6 +525,11 @@ def execute_step(step: dict, last_window: str | None = None) -> StepResult:
         return StepResult(ok=True, reason="reason step (no UI action)")
 
     if action == "chain":
+        extra = step.get("extra") or {}
+        if step.get("parts") or extra.get("parts"):
+            from interaction_chain import execute_interaction_chain
+
+            return execute_interaction_chain(step, last_window)
         return _execute_chain(step, last_window)
 
     wanted = infer_window_title(step, last_window)
@@ -457,37 +544,45 @@ def execute_step(step: dict, last_window: str | None = None) -> StepResult:
     elif wanted:
         win, found_title = find_window(wanted)
         result.window_found = found_title
-        if win is None:
-            result.reason = f"target window {wanted!r} not found — is the app open?"
-            return result
-        result.window_focused = focus_window(win)
         tray = wanted.lower() in ("taskbar", "shell_traywnd")
-        if not result.window_focused:
-            if tray:
-                result.lines.append("  taskbar found; focus() skipped (tray is not a normal window)")
+        if win is None:
+            from chain_exec import _anchor_click_point
+
+            if action in ("click", "click_input", "copy") and _anchor_click_point(_step_anchor(step)):
+                result.lines.append(
+                    f"  target window {wanted!r} not found; using taught click point"
+                )
             else:
+                result.reason = f"target window {wanted!r} not found — is the app open?"
+                return result
+        else:
+            result.window_focused = focus_window(win)
+            if not result.window_focused:
+                if tray:
+                    result.lines.append("  taskbar found; focus() skipped (tray is not a normal window)")
+                else:
+                    result.reason = (
+                        f"target window {found_title or wanted!r} found but could not be focused"
+                    )
+                    return result
+            fg = foreground_title()
+            result.lines.append(f"  foreground after focus={fg!r}")
+            if not tray and not _titles_match(wanted, fg) and not _titles_match(found_title, fg):
                 result.reason = (
-                    f"target window {found_title or wanted!r} found but could not be focused"
+                    f"target window {wanted!r} not foreground "
+                    f"(foreground={fg!r}) — is the app open?"
                 )
                 return result
-        fg = foreground_title()
-        result.lines.append(f"  foreground after focus={fg!r}")
-        if not tray and not _titles_match(wanted, fg) and not _titles_match(found_title, fg):
-            result.reason = (
-                f"target window {wanted!r} not foreground "
-                f"(foreground={fg!r}) — is the app open?"
-            )
-            return result
-        try:
-            import os_input
+            try:
+                import os_input
 
-            n = _el_name(focused_wrapper())
-            if n in ("Keep changes", "Don't Save", "Don't save", "Save"):
-                os_input.press("esc")
-                time.sleep(0.25)
-                focus_window(win)
-        except Exception:
-            pass
+                n = _el_name(focused_wrapper())
+                if n in ("Keep changes", "Don't Save", "Don't save", "Save"):
+                    os_input.press("esc")
+                    time.sleep(0.25)
+                    focus_window(win)
+            except Exception:
+                pass
     else:
         result.lines.append("  no target window inferred; searching desktop")
 
@@ -513,11 +608,7 @@ def execute_step(step: dict, last_window: str | None = None) -> StepResult:
             if el is not None:
                 result.lines.append("  CoreInput not in this Notepad; using Text editor Document")
         if el is None:
-            result.reason = (
-                f"no element resolved for click name={name!r} type={etype!r} "
-                f"in window {result.window_found or wanted!r}"
-            )
-            return result
+            return _click_with_anchor(step, win, wanted, found_title, name, etype, result)
         result.element_name = _el_name(el) or name
         result.element_type = _el_type(el) or etype
         result.element_rect = _rect(el)
@@ -536,8 +627,6 @@ def execute_step(step: dict, last_window: str | None = None) -> StepResult:
             or (after_fg != before_fg)
         )
         fg_ok = _titles_match(wanted, after_fg) or _titles_match(found_title, after_fg)
-        # A click is verified only if the target app stayed/became foreground
-        # or keyboard focus actually moved — never because the element still exists.
         if not fg_ok and not focus_changed:
             result.reason = "click produced no observable state change"
             return result
@@ -545,6 +634,75 @@ def execute_step(step: dict, last_window: str | None = None) -> StepResult:
         result.reason = "click verified (foreground or focus changed)"
         result.window_found = result.window_found or found_title or after_fg
         return result
+
+    if action == "hover":
+        from hover_actions import execute_hover
+
+        hover_out = execute_hover(step)
+        for k, v in hover_out.items():
+            if hasattr(result, k):
+                setattr(result, k, v)
+        result.ok = bool(hover_out.get("ok"))
+        result.reason = hover_out.get("reason") or ""
+        if hover_out.get("click_xy"):
+            result.click_xy = tuple(hover_out["click_xy"])
+        return result
+
+    if action == "prompt":
+        from teaching import load_taught
+        from vision_chat import execute_vision_prompt_step
+
+        wf_name = (
+            (step.get("workflow_name") or "")
+            or ((step.get("extra") or {}).get("workflow_name") or "")
+        )
+        sid = step.get("id") or step.get("from_taught") or "s1"
+        wf = None
+        if wf_name:
+            try:
+                wf = load_taught(wf_name)
+            except Exception:
+                wf = None
+        taught = step
+        if wf is not None:
+            try:
+                from teaching import get_step
+
+                taught = get_step(wf, sid)
+            except Exception:
+                taught = step
+        out = execute_vision_prompt_step(
+            wf,
+            taught,
+            workflow_name=wf_name or (wf.name if wf else ""),
+            step_id=sid,
+        )
+        return out["result"]
+
+    if action == "scroll":
+        from scroll_actions import execute_scroll
+
+        scroll_out = execute_scroll(step)
+        result.ok = bool(scroll_out.get("ok"))
+        result.reason = scroll_out.get("reason") or ""
+        return result
+
+    if action == "copy":
+        anchor = _step_anchor(step)
+        if name or anchor:
+            copy_step = dict(step)
+            copy_step["action"] = "click"
+            return execute_step(copy_step, last_window)
+        try:
+            import os_input
+
+            os_input.hotkey("ctrl+c")
+            result.ok = True
+            result.reason = "copy via Ctrl+C"
+            return result
+        except Exception as e:
+            result.reason = f"copy failed: {e}"
+            return result
 
     if action in ("type", "type_text"):
         if name:

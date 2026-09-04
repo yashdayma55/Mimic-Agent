@@ -8,6 +8,7 @@ from typing import Any, Optional
 CLOSED_ACTIONS = (
     "click",
     "chain",
+    "hover",
     "type",
     "press",
     "scroll",
@@ -30,6 +31,7 @@ CLOSED_ACTIONS = (
 REQUIRED_PARAMS = {
     "click": (),
     "chain": (),
+    "hover": (),
     "type": ("value",),
     "press": ("value",),
     "scroll": (),
@@ -83,6 +85,8 @@ class PlanNode:
             "value": self.value,
             "id": self.id,
             "irreversible": self.irreversible,
+            "produces": list(self.produces or []),
+            "consumes": list(self.consumes or []),
             **(self.extra or {}),
         }
         if self.action == "chain":

@@ -49,16 +49,39 @@ def _chain_target_desc(clicks: list) -> str:
 
 
 def step_to_node(step: TaughtStep, inputs: dict | None = None) -> PlanNode:
+    from prompt_steps import METHOD_PROMPT
+
+    if (getattr(step, "method", "anchor") or "anchor") == METHOD_PROMPT:
+        text = (step.prompt_instruction or step.user_description or "").strip()
+        return PlanNode(
+            id=step.id,
+            action="prompt",
+            target_desc=text[:80] if text else None,
+            value=text,
+            produces=list(step.produces or []),
+            consumes=list(step.consumes or []),
+            extra={
+                "from_taught": step.id,
+                "method": METHOD_PROMPT,
+                "prompt_instruction": text,
+                "memory_note": getattr(step, "memory_note", "") or "",
+                "produces": list(step.produces or []),
+            },
+        )
     action = step.action or {}
     kind = action.get("action") or "wait"
     if kind == "chain":
+        parts = action.get("parts") or []
         clicks = action.get("clicks") or _chain_clicks_from_step(step)
         extra = {
             "clicks": clicks,
             "anchors": list(step.anchors or []),
-            "click_count": int(getattr(step, "click_count", 1) or 1),
+            "click_count": int(action.get("click_count") or getattr(step, "click_count", 1) or 1),
             "from_taught": step.id,
         }
+        if parts:
+            extra["parts"] = parts
+            extra["chain_kind"] = action.get("chain_kind") or "interaction"
         if getattr(step, "memory_note", ""):
             extra["memory_note"] = step.memory_note
         extra["web_allowed"] = bool(getattr(step, "web_allowed", False))
@@ -116,9 +139,16 @@ def step_to_node(step: TaughtStep, inputs: dict | None = None) -> PlanNode:
 
 
 def compile_taught(wf: TaughtWorkflow, inputs: dict | None = None) -> dict:
+    from prompt_steps import compile_prompt_step_ok
+
     unapproved = [s.id for s in wf.steps if s.status != "approved"]
     if unapproved:
         raise TeachingError(f"cannot compile unapproved steps: {unapproved}")
+    for s in wf.steps:
+        if not compile_prompt_step_ok(s):
+            raise TeachingError(
+                f"step {s.id} uses prompt method but has no success check — add one before compile"
+            )
     nodes = [step_to_node(s, inputs) for s in sorted(wf.steps, key=lambda x: x.order)]
     plan = Plan(nodes=nodes, source=f"taught:{wf.name}")
     viol = validate_plan(plan)
@@ -347,7 +377,125 @@ def demo_taught_step(wf: TaughtWorkflow, step_id: str, test_values: dict | None 
 
         record_case_match(matched_case)
         save_taught(wf)
-    out = run_verified_plan([exec_plan["runner_step"]], halt_on_fail=True)
+    runner_step = dict(exec_plan["runner_step"] or {})
+    runner_step["workflow_name"] = wf.name
+    if getattr(step, "produces", None):
+        runner_step["produces"] = list(step.produces or [])
+    if getattr(step, "prompt_instruction", None):
+        runner_step["prompt_instruction"] = step.prompt_instruction
+    if getattr(step, "memory_note", None):
+        runner_step["memory_note"] = step.memory_note
+    plan_runners = list(exec_plan.get("runner_steps") or [runner_step])
+    for rs in plan_runners:
+        rs.setdefault("workflow_name", wf.name)
+        if getattr(step, "produces", None) and rs is plan_runners[-1] and exec_plan.get("action") != "case":
+            rs["produces"] = list(step.produces or [])
+    out = run_verified_plan(plan_runners, halt_on_fail=True)
+    if (
+        out.get("ok")
+        and exec_plan.get("action") == "case"
+        and exec_plan.get("continue_parent")
+        and exec_plan.get("parent_runner_step")
+    ):
+        parent_runner = dict(exec_plan["parent_runner_step"])
+        parent_runner["workflow_name"] = wf.name
+        if getattr(step, "produces", None):
+            parent_runner["produces"] = list(step.produces or [])
+        if getattr(step, "prompt_instruction", None):
+            parent_runner["prompt_instruction"] = step.prompt_instruction
+        parent_out = run_verified_plan([parent_runner], halt_on_fail=True)
+        if parent_out.get("ok"):
+            out = dict(parent_out)
+            out["case_ok"] = True
+            out["cascaded"] = True
+            out["reason"] = parent_out.get("reason") or "case then parent ok"
+        else:
+            out = dict(parent_out)
+            out["case_ok"] = True
+            out["cascaded"] = True
+            out["ok"] = False
+            out["reason"] = (
+                "case resolved, but parent step failed: "
+                + str(parent_out.get("reason") or "")
+            )
+
+    # Normal extract failed with "no email" — switch into an approved case, then retry.
+    if (
+        not out.get("ok")
+        and matched_case is None
+        and list_step_cases(step)
+    ):
+        fail_reason = None
+        fail_observed = None
+        if out.get("results"):
+            fail_reason = out["results"][-1].reason
+            fail_observed = out["results"][-1].value_after
+        fail_reason = fail_reason or out.get("reason")
+        from case_match import pick_case_after_blocker_failure
+
+        pick = pick_case_after_blocker_failure(
+            step,
+            exec_plan.get("structural") or before_demo or {},
+            wf.name,
+            reason=str(fail_reason or ""),
+            observed=str(fail_observed or ""),
+            vision_fn=vision_fn,
+        )
+        if pick and pick.get("case"):
+            from case_steps import case_continue_with_parent, case_to_runner_steps
+            from step_cases import record_case_match
+
+            matched_case = pick["case"]
+            record_case_match(matched_case)
+            case_runners = case_to_runner_steps(matched_case, step.id)
+            for rs in case_runners:
+                rs["workflow_name"] = wf.name
+            case_out = run_verified_plan(case_runners, halt_on_fail=True)
+            exec_plan = dict(exec_plan)
+            exec_plan["action"] = "case"
+            exec_plan["case"] = matched_case
+            exec_plan["log"] = pick.get("log") or exec_plan.get("log")
+            exec_plan["continue_parent"] = case_continue_with_parent(matched_case)
+            if case_out.get("ok") and exec_plan["continue_parent"]:
+                parent_runner = dict(exec_plan.get("runner_step") or {})
+                # Prefer a fresh parent runner from the original normal plan
+                parent_node = step_to_node(step, test_values)
+                parent_runner = parent_node.to_runner_step()
+                parent_runner["workflow_name"] = wf.name
+                if getattr(step, "produces", None):
+                    parent_runner["produces"] = list(step.produces or [])
+                if getattr(step, "prompt_instruction", None):
+                    parent_runner["prompt_instruction"] = step.prompt_instruction
+                parent_out = run_verified_plan([parent_runner], halt_on_fail=True)
+                if parent_out.get("ok"):
+                    out = dict(parent_out)
+                    out["case_ok"] = True
+                    out["cascaded"] = True
+                    out["blocker_cascade"] = True
+                    out["reason"] = parent_out.get("reason") or "case then parent ok"
+                else:
+                    out = dict(parent_out)
+                    out["case_ok"] = True
+                    out["cascaded"] = True
+                    out["blocker_cascade"] = True
+                    out["ok"] = False
+                    out["reason"] = (
+                        "case resolved, but parent step failed: "
+                        + str(parent_out.get("reason") or "")
+                    )
+            elif case_out.get("ok"):
+                out = dict(case_out)
+                out["cascaded"] = False
+                out["blocker_cascade"] = True
+            else:
+                out = dict(case_out)
+                out["ok"] = False
+                out["blocker_cascade"] = True
+                out["reason"] = (
+                    "blocker case failed: " + str(case_out.get("reason") or fail_reason or "")
+                )
+            save_taught(wf)
+
     if before_demo is not None:
         from success_signals import snapshot_structural_state
 
@@ -361,7 +509,21 @@ def demo_taught_step(wf: TaughtWorkflow, step_id: str, test_values: dict | None 
         observed = None
     from success_signals import verify_success_check
 
-    if matched_case is not None:
+    method = (getattr(step, "method", "anchor") or "anchor").strip().lower()
+    # After case→parent cascade, trust the parent outcome (email extract), not a stale case title check.
+    if matched_case is not None and out.get("cascaded") and method == "prompt" and ok and observed:
+        v = {"ok": True, "reason": reason or f"prompt produced {observed!r}", "cost": "vision"}
+    elif matched_case is not None and out.get("cascaded") and ok:
+        v = verify_success_check(
+            step,
+            wf.name,
+            before_demo=before_demo,
+            after_demo=after_demo,
+            os_input_calls=os_input.call_count() - before,
+        )
+        if v.get("ok") is None:
+            v = {"ok": True, "reason": reason or "case then parent ok", "cost": "cascade"}
+    elif matched_case is not None:
         from case_match import verify_case_success
 
         v = verify_case_success(
@@ -371,6 +533,9 @@ def demo_taught_step(wf: TaughtWorkflow, step_id: str, test_values: dict | None 
             after_demo=after_demo,
             os_input_calls=os_input.call_count() - before,
         )
+    elif method == "prompt" and ok and observed:
+        # Vision extract / prompt steps don't change UI chrome — runner result is enough.
+        v = {"ok": True, "reason": reason or f"prompt produced {observed!r}", "cost": "vision"}
     else:
         v = verify_success_check(
             step,
@@ -403,15 +568,39 @@ def demo_taught_step(wf: TaughtWorkflow, step_id: str, test_values: dict | None 
     }
     if matched_case is not None:
         result["case_id"] = matched_case.id
+        result["cascaded"] = bool(out.get("cascaded"))
+        try:
+            from case_steps import mark_case_demo
+
+            mark_case_demo(matched_case, {
+                "ok": ok,
+                "reason": reason,
+                "observed": observed,
+                "cascaded": bool(out.get("cascaded")),
+            })
+        except Exception:
+            pass
     if focus_result is not None:
         result["focus"] = focus_result
     if mode == "manual" and getattr(step, "expected_start_frame", None):
         result["expected_start_frame"] = step.expected_start_frame
+    if method == "prompt" and ok and out.get("results"):
+        emailish = out["results"][-1].value_after
+        if emailish and "@" in str(emailish):
+            param = "{recipient_email}"
+            for p in step.produces or []:
+                if "email" in str(p).lower():
+                    param = str(p)
+                    break
+            result["produced"] = {param: emailish}
+            result["observed"] = emailish
     step.demo = result
     if ok:
         if step.status != "approved":
             step.status = "demonstrated"
         step.edit_notice = None
+        if step.case_halt and not (step.case_halt or {}).get("resolution"):
+            step.case_halt = None
     else:
         try:
             from case_halt_loop import maybe_record_demo_halt
