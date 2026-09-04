@@ -734,11 +734,20 @@ def teach_add_photo(name: str, step_id: str, image_b64: str, filename: str = "sh
     return attach_photo(wf, step_id, blob, filename=filename)
 
 
-def teach_observe(name: str, step_id: str, seconds: float = 15) -> dict:
+def teach_observe(name: str, step_id: str, seconds: float = 15, click_count: int | None = None) -> dict:
     from observe import watch_step
     from teach_loop import _record_watch_capture
-    from teaching import get_step, load_taught
+    from teaching import get_step, load_taught, save_taught, validate_click_count
 
+    if step_id not in ("__start__", "start", "start_screen") and click_count is not None:
+        wf = load_taught(name)
+        step = get_step(wf, step_id)
+        auth = step.case_authoring
+        if auth and auth.get("phase") == "needs_resolution":
+            cc = validate_click_count(click_count)
+            auth["click_count"] = cc
+            step.click_count = cc
+            save_taught(wf)
     out = watch_step(name, step_id, seconds=seconds)
     if step_id not in ("__start__", "start", "start_screen"):
         wf = load_taught(name)
@@ -814,21 +823,42 @@ def teach_capture(name: str, step_id: str, mode: str = "show", point=None,
     """Unified capture path for float widget and review card."""
     mode = (mode or "show").lower()
     if mode == "watch":
-        return teach_observe(name, step_id, seconds=seconds)
-    if click_count is not None and step_id not in ("__start__", "start", "start_screen"):
+        return teach_observe(name, step_id, seconds=seconds, click_count=click_count)
+    if step_id not in ("__start__", "start", "start_screen"):
         from teaching import get_step, load_taught, save_taught, validate_click_count
 
         wf = load_taught(name)
         step = get_step(wf, step_id)
-        step.click_count = validate_click_count(click_count)
-        save_taught(wf)
+        auth = step.case_authoring
+        if auth and auth.get("phase") == "needs_resolution":
+            cc = validate_click_count(
+                click_count if click_count is not None else auth.get("click_count", 1)
+            )
+            auth["click_count"] = cc
+            step.click_count = cc
+            save_taught(wf)
+        elif click_count is not None:
+            step.click_count = validate_click_count(click_count)
+            save_taught(wf)
     return teach_show(
         name, step_id, point=point, batch=batch,
         countdown=countdown, window_sec=window_sec,
     )
 
 
-def teach_arm_show(name: str, step_id: str, click_count: int | None = None) -> dict:
+def teach_arm_show(
+    name: str,
+    step_id: str,
+    click_count: int | None = None,
+    *,
+    case_mode: bool = False,
+    api_url: str | None = None,
+    vision_mode: bool = False,
+    question: str = "",
+    case_id: str = "",
+) -> dict:
+    if case_mode:
+        return teach_arm_case_float(name, step_id, click_count=click_count, api_url=api_url)
     from float_widget import arm_show
     from teaching import get_step, load_taught, save_taught, validate_click_count
 
@@ -842,7 +872,12 @@ def teach_arm_show(name: str, step_id: str, click_count: int | None = None) -> d
         cc = int(getattr(get_step(wf, step_id), "click_count", 1) or 1)
     except Exception:
         pass
-    out = arm_show(workflow=name, step_id=step_id, api_url="http://127.0.0.1:8765", click_count=cc)
+    base = api_url or "http://127.0.0.1:8765"
+    mode = "vision" if vision_mode else "show"
+    out = arm_show(
+        workflow=name, step_id=step_id, api_url=base, click_count=cc,
+        mode=mode, vision_question=question or "", case_id=case_id or "",
+    )
     out["click_count"] = cc
     return out
 
@@ -923,12 +958,25 @@ def teach_demo(name: str, step_id: str, test_values: dict | None = None, mode: s
     return demo_step(wf, step_id, test_values=test_values, mode=mode)
 
 
-def teach_focus_target(name: str, step_id: str) -> dict:
+def teach_focus_target(name: str, step_id: str, case_id: str | None = None) -> dict:
     from teach_compile import focus_step_target
     from teaching import load_taught
 
     wf = load_taught(name)
+    if case_id:
+        from case_steps import focus_case_target
+
+        out = focus_case_target(wf, step_id, case_id)
+        return {"ok": bool(out.get("ok")), **out}
     out = focus_step_target(wf, step_id)
+    if out.get("ok"):
+        return {"ok": True, **out}
+    try:
+        from vision_chat import focus_target_for_vision
+
+        out = focus_target_for_vision(wf, step_id)
+    except Exception:
+        pass
     return {"ok": bool(out.get("ok")), **out}
 
 
@@ -958,13 +1006,232 @@ def teach_case_attach(name: str, halting_step_id: str, answer: str, target_step_
     return {"ok": True, **out}
 
 
-def teach_case_capture_start(name: str, step_id: str) -> dict:
+def teach_case_capture_start(
+    name: str, step_id: str, click_count: int = 1, situation: str = "",
+) -> dict:
     from case_authoring import start_user_case_capture
     from teaching import TeachingError, load_taught
 
     wf = load_taught(name)
     try:
-        out = start_user_case_capture(wf, step_id)
+        out = start_user_case_capture(
+            wf, step_id, click_count=click_count, situation=situation,
+        )
+    except TeachingError as e:
+        return {"ok": False, "error": str(e)}
+    return out
+
+
+def teach_arm_case_float(
+    name: str,
+    step_id: str,
+    click_count: int | None = None,
+    api_url: str | None = None,
+) -> dict:
+    from case_authoring import float_authoring_state
+    from float_widget import arm_case_authoring
+    from teaching import get_step, load_taught, save_taught, validate_click_count
+
+    wf = load_taught(name)
+    step = get_step(wf, step_id)
+    state = float_authoring_state(step)
+    if not state:
+        return {"ok": False, "error": "no case authoring in progress for this step"}
+    cc = state["click_count"]
+    if click_count is not None:
+        cc = validate_click_count(click_count)
+        auth = step.case_authoring or {}
+        auth["click_count"] = cc
+        step.case_authoring = auth
+        step.click_count = cc
+        save_taught(wf)
+        state["click_count"] = cc
+    base = api_url or "http://127.0.0.1:8765"
+    out = arm_case_authoring(
+        name,
+        step_id,
+        phase=state["phase"],
+        case_label=state["case_label"],
+        click_count=cc,
+        api_url=base,
+    )
+    return {"ok": True, **out, **state}
+
+
+def teach_case_grab_screen(name: str, step_id: str) -> dict:
+    from case_authoring import grab_user_case_screen
+    from teaching import TeachingError, load_taught
+
+    wf = load_taught(name)
+    try:
+        out = grab_user_case_screen(wf, step_id)
+    except TeachingError as e:
+        return {"ok": False, "error": str(e)}
+    return out
+
+
+def teach_case_reteach(name: str, step_id: str, case_id: str) -> dict:
+    from case_steps import begin_case_reteach
+    from teaching import TeachingError, load_taught
+
+    wf = load_taught(name)
+    try:
+        return begin_case_reteach(wf, step_id, case_id)
+    except TeachingError as e:
+        return {"ok": False, "error": str(e)}
+
+
+def teach_case_prompt_try(
+    name: str, step_id: str, case_id: str, instruction: str = "",
+) -> dict:
+    from case_steps import try_case_prompt
+    from teaching import TeachingError, load_taught
+
+    wf = load_taught(name)
+    try:
+        return try_case_prompt(wf, step_id, case_id, instruction or "")
+    except TeachingError as e:
+        return {"ok": False, "error": str(e)}
+
+
+def teach_case_begin(
+    name: str,
+    step_id: str,
+    when_applies: str = "",
+    what_to_do: str = "",
+    continue_prompt: str = "",
+    click_count: int = 1,
+) -> dict:
+    from case_steps import begin_expandable_case
+    from teaching import TeachingError, load_taught
+
+    wf = load_taught(name)
+    try:
+        return begin_expandable_case(
+            wf,
+            step_id,
+            when_applies=when_applies or "",
+            what_to_do=what_to_do or "",
+            continue_prompt=continue_prompt or "",
+            click_count=click_count or 1,
+        )
+    except TeachingError as e:
+        return {"ok": False, "error": str(e)}
+
+
+def teach_case_draft_patch(name: str, step_id: str, fields: dict | None = None) -> dict:
+    from case_steps import patch_case_draft
+    from teaching import TeachingError, load_taught
+
+    fields = fields or {}
+    wf = load_taught(name)
+    try:
+        return patch_case_draft(
+            wf,
+            step_id,
+            when_applies=fields.get("when_applies"),
+            what_to_do=fields.get("what_to_do"),
+            continue_prompt=fields.get("continue_prompt"),
+            continue_with_parent=fields.get("continue_with_parent"),
+            method=fields.get("method"),
+            prompt_instruction=fields.get("prompt_instruction"),
+            memory_note=fields.get("memory_note"),
+            click_count=fields.get("click_count"),
+        )
+    except TeachingError as e:
+        return {"ok": False, "error": str(e)}
+
+
+def teach_case_save_draft(name: str, step_id: str) -> dict:
+    from case_steps import save_expandable_case
+    from teaching import TeachingError, load_taught
+
+    wf = load_taught(name)
+    try:
+        return save_expandable_case(wf, step_id)
+    except TeachingError as e:
+        return {"ok": False, "error": str(e)}
+
+
+def teach_case_patch(name: str, step_id: str, case_id: str, fields: dict | None = None) -> dict:
+    from case_steps import patch_saved_case
+    from teaching import TeachingError, load_taught
+
+    wf = load_taught(name)
+    try:
+        return patch_saved_case(wf, step_id, case_id, fields or {})
+    except TeachingError as e:
+        return {"ok": False, "error": str(e)}
+
+
+def teach_case_approve(name: str, step_id: str, case_id: str) -> dict:
+    from case_steps import approve_case
+    from teaching import TeachingError, load_taught
+
+    wf = load_taught(name)
+    try:
+        return approve_case(wf, step_id, case_id)
+    except TeachingError as e:
+        return {"ok": False, "error": str(e)}
+
+
+def teach_case_demo(
+    name: str,
+    step_id: str,
+    case_id: str,
+    continue_parent: bool | None = None,
+) -> dict:
+    from case_steps import demo_case
+    from teaching import TeachingError, load_taught
+
+    wf = load_taught(name)
+    try:
+        return demo_case(
+            wf, step_id, case_id, continue_parent=continue_parent,
+        )
+    except TeachingError as e:
+        return {"ok": False, "error": str(e)}
+
+
+def teach_case_fix_access_email(
+    name: str, step_id: str, case_id: str, instruction: str = "",
+) -> dict:
+    from case_steps import fix_case_access_email_prompt
+    from teaching import TeachingError, load_taught
+
+    wf = load_taught(name)
+    try:
+        return fix_case_access_email_prompt(
+            wf, step_id, case_id, instruction=instruction or "",
+        )
+    except TeachingError as e:
+        return {"ok": False, "error": str(e)}
+
+
+def teach_case_sub_description(name: str, step_id: str, description: str) -> dict:
+    from case_authoring import set_case_sub_description
+    from teaching import TeachingError, load_taught
+
+    wf = load_taught(name)
+    try:
+        return set_case_sub_description(wf, step_id, description or "")
+    except TeachingError as e:
+        return {"ok": False, "error": str(e)}
+
+
+def teach_case_finish(name: str, step_id: str, click_count: int | None = None) -> dict:
+    from case_authoring import finish_user_case_from_capture
+    from teaching import TeachingError, load_taught, save_taught, validate_click_count, get_step
+
+    wf = load_taught(name)
+    step = get_step(wf, step_id)
+    auth = step.case_authoring
+    if auth and click_count is not None:
+        auth["click_count"] = validate_click_count(click_count)
+        step.click_count = auth["click_count"]
+        save_taught(wf)
+    try:
+        out = finish_user_case_from_capture(wf, step_id)
     except TeachingError as e:
         return {"ok": False, "error": str(e)}
     return out
@@ -1000,13 +1267,13 @@ def teach_case_capture_frame(
     return out
 
 
-def teach_case_describe(name: str, step_id: str, description: str) -> dict:
+def teach_case_describe(name: str, step_id: str, description: str, click_count: int = 1) -> dict:
     from case_authoring import start_user_case_describe
     from teaching import TeachingError, load_taught
 
     wf = load_taught(name)
     try:
-        out = start_user_case_describe(wf, step_id, description)
+        out = start_user_case_describe(wf, step_id, description, click_count=click_count)
     except TeachingError as e:
         return {"ok": False, "error": str(e)}
     return out
@@ -1018,6 +1285,17 @@ def teach_case_authoring_cancel(name: str, step_id: str) -> dict:
 
     wf = load_taught(name)
     return cancel_user_case_authoring(wf, step_id)
+
+
+def teach_case_halt_dismiss(name: str, step_id: str) -> dict:
+    from case_halt_loop import dismiss_case_halt
+    from teaching import TeachingError, load_taught
+
+    wf = load_taught(name)
+    try:
+        return dismiss_case_halt(wf, step_id)
+    except TeachingError as e:
+        return {"ok": False, "error": str(e)}
 
 
 def teach_reflect(name: str, step_id: str) -> dict:
@@ -1079,3 +1357,93 @@ def apply_repair(name: str, node_id: str, x: int, y: int) -> dict:
     node = node_from_dict({"id": str(node_id), "action": "click"})
     repaired = apply_repair_click(node, shot, int(x), int(y), paths["workflow_dir"])
     return {"ok": True, "node": repaired.to_dict(), "screenshot": shot}
+
+
+def teach_vision_ask(name: str, step_id: str, question: str) -> dict:
+    from teaching import TeachingError, load_taught
+    from vision_chat import ask_vision
+
+    wf = load_taught(name)
+    try:
+        return ask_vision(wf, step_id, question)
+    except TeachingError as e:
+        return {"ok": False, "error": str(e)}
+
+
+def teach_vision_reply(
+    name: str,
+    step_id: str,
+    reply: str,
+    *,
+    regrab: bool = False,
+) -> dict:
+    from teaching import TeachingError, load_taught
+    from vision_chat import reply_vision
+
+    wf = load_taught(name)
+    try:
+        return reply_vision(wf, step_id, reply, regrab=bool(regrab))
+    except TeachingError as e:
+        return {"ok": False, "error": str(e)}
+
+
+def teach_vision_as_step(
+    name: str,
+    step_id: str,
+    remember_prompt: str = "",
+) -> dict:
+    from teaching import TeachingError, load_taught
+    from vision_chat import apply_vision_chat_to_step
+
+    wf = load_taught(name)
+    try:
+        return apply_vision_chat_to_step(wf, step_id, remember_prompt or "")
+    except TeachingError as e:
+        return {"ok": False, "error": str(e)}
+
+
+def teach_vision_remove(name: str, step_id: str, index: int) -> dict:
+    from teaching import TeachingError, load_taught
+    from vision_chat import remove_vision_chat_entry
+
+    wf = load_taught(name)
+    try:
+        return remove_vision_chat_entry(wf, step_id, int(index))
+    except TeachingError as e:
+        return {"ok": False, "error": str(e)}
+
+
+def teach_prompt_try(name: str, step_id: str, instruction: str = "") -> dict:
+    from prompt_steps import try_prompt_instruction
+    from teaching import TeachingError, load_taught
+
+    wf = load_taught(name)
+    try:
+        return try_prompt_instruction(wf, step_id, instruction or None)
+    except TeachingError as e:
+        return {"ok": False, "error": str(e)}
+
+
+def teach_prompt_save(name: str, step_id: str, instruction: str) -> dict:
+    from prompt_steps import save_prompt_method
+    from teaching import TeachingError, load_taught
+
+    wf = load_taught(name)
+    try:
+        return save_prompt_method(wf, step_id, instruction)
+    except TeachingError as e:
+        return {"ok": False, "error": str(e)}
+
+
+def teach_set_method(name: str, step_id: str, method: str) -> dict:
+    from prompt_steps import METHOD_ANCHOR, set_step_method
+    from teaching import TeachingError, get_step, load_taught, save_taught
+
+    wf = load_taught(name)
+    try:
+        step = get_step(wf, step_id)
+        set_step_method(step, method)
+        save_taught(wf)
+        return {"ok": True, "method": step.method or METHOD_ANCHOR, "step": step.to_dict()}
+    except TeachingError as e:
+        return {"ok": False, "error": str(e)}

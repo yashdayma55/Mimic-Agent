@@ -300,6 +300,10 @@
     .case-body { min-width: 0; }
     .case-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 4px; }
     .case-label { font-size: 13px; font-weight: 500; margin: 0; }
+    .case-sub { font-size: 12px; color: var(--ink-2); margin: 0 0 4px; }
+    .case-detail { font-size: 12.5px; color: var(--ink); margin: 0 0 6px; line-height: 1.45; }
+    .case-detail b { font-weight: 500; color: var(--ink-2); font-size: 11px; letter-spacing: .04em; text-transform: uppercase; display: block; margin-bottom: 2px; }
+    .case-detail.situation { font-size: 13px; }
     .case-origin-badge {
       font-family: "IBM Plex Mono", monospace; font-size: 10px; letter-spacing: .06em;
       text-transform: uppercase; padding: 2px 7px; border-radius: 20px; white-space: nowrap;
@@ -458,7 +462,7 @@
   var STAGES = ["draft", "questioning", "understood", "demonstrated", "approved"];
   var state = {
     workflows: [], current: null, context: "", steps: [],
-    pending: {}, demoMode: {}
+    pending: {}, demoMode: {}, caseExpand: {}, caseEdit: {}
   };
 
   function $(id) { return document.getElementById(id); }
@@ -479,13 +483,20 @@
       opt.body = JSON.stringify(body);
     }
     return fetch(path, opt).then(function (r) {
-      return r.json().then(function (d) {
+      return r.json().catch(function () {
+        return { ok: false, error: "HTTP " + r.status + " for " + path };
+      }).then(function (d) {
         d._http = r.status;
+        if (r.status >= 400 && d.ok !== false) {
+          d.ok = false;
+          d.error = d.error || ("HTTP " + r.status + " for " + path);
+        }
         return d;
       });
     });
   }
   function fail(d, fallback) {
+    if (d && d._http >= 400) throw new Error((d && d.error) || fallback || "request failed");
     if (d && d.ok === false) throw new Error(d.error || fallback || "request failed");
     return d;
   }
@@ -535,12 +546,118 @@
   }
   function caseLabel(c) {
     var tr = c.trigger || {};
-    if (tr.foreground_title) return "a " + tr.foreground_title + " screen appears";
+    if (tr.description) return tr.description;
+    if (tr.foreground_title) return "When a " + tr.foreground_title + " window is showing";
     var elems = tr.a11y_present || [];
-    if (elems.length && elems[0].name) return "'" + elems[0].name + "' is on screen";
+    if (elems.length && elems[0].name) return "When '" + elems[0].name + "' is on screen";
     var sc = c.success_check || {};
     if (sc.text || sc.detail) return sc.text || sc.detail;
     return "case " + (c.id || "?");
+  }
+  function caseResolutionText(c) {
+    var sub = c.sub_step || {};
+    if ((sub.method || "") === "prompt" && (sub.prompt_instruction || "").trim()) {
+      return sub.prompt_instruction.trim();
+    }
+    if ((sub.user_description || "").trim()) {
+      var ud = sub.user_description.trim();
+      // Prefer description over a stale wrong capture name when they disagree later.
+      var res = c.resolution || {};
+      var captured = (res.elem_name || (sub.action && sub.action.elem_name) || "").trim();
+      if (!captured || ud.toLowerCase().indexOf("access email") >= 0) return ud;
+    }
+    var res = c.resolution || {};
+    var action = (res.action || (sub.action && sub.action.action) || "").trim();
+    var target = (
+      res.elem_name
+      || (sub.action && sub.action.elem_name)
+      || res.text
+      || res.summary
+      || ""
+    ).trim();
+    if (action && target && action !== "prompt") return action + " " + target;
+    var desc = (sub.user_description || "").trim();
+    if (desc) return desc;
+    if (action === "chain") {
+      var clicks = res.clicks || [];
+      return clicks.map(function (cl) {
+        return "click " + ((cl && (cl.elem_name || cl.name)) || "element");
+      }).join(", then ");
+    }
+    return action || "—";
+  }
+  function caseMismatch(c) {
+    var sub = c.sub_step || {};
+    var when = ((c.trigger && c.trigger.description) || "").toLowerCase();
+    var what = (sub.user_description || "").toLowerCase();
+    var anchors = (sub.anchors || []).filter(Boolean);
+    var captured = "";
+    if (anchors.length) {
+      captured = ((anchors[anchors.length - 1].primary || {}).name || "");
+    }
+    captured = (captured || (c.resolution && c.resolution.elem_name) || "").toLowerCase();
+    var emailish = /no email|access email|blocked extract|not visible|reveal email/.test(when + " " + what);
+    var wrong = /wishlist|add to cart|shopping|\bcart\b|add to list/.test(captured + " " + what);
+    if (emailish && wrong && (sub.method || "anchor") !== "prompt") {
+      return {
+        captured: captured || what,
+        message: "Taught click looks wrong for this blocker (got " + (captured || what || "unknown")
+          + "). Use Access email — not cart/wishlist."
+      };
+    }
+    return null;
+  }
+
+  function renderCaseAnchors(anchors, stepId, caseId) {
+    var list = (anchors || []).filter(Boolean);
+    if (!list.length) {
+      return '<p class="hint">No anchors yet — use <b>Show me</b> on this case, or switch method to prompt.</p>';
+    }
+    var html = '<div class="case-anchors" style="margin-top:10px">';
+    list.forEach(function (anc, ai) {
+      var p = anc.primary || {};
+      var src = cropUrl(anc);
+      var label = list.length > 1 ? ("Click " + (ai + 1)) : "Captured target";
+      html += '<div class="anchor" style="margin-top:10px"><div class="crop' + (anc.focused ? " tight" : "") + '">'
+        + (src ? '<img src="' + esc(src) + '" alt="">' : "")
+        + '</div><p class="hint"><b>' + esc(label) + ":</b> "
+        + esc(p.name || "unnamed") + (p.control_type ? (" · " + esc(p.control_type)) : "")
+        + (p.pipeline ? (" · via " + esc(p.pipeline)) : "") + "</p>";
+      if (anc.parent_path) {
+        html += '<p class="case-mono">path: ' + esc(anc.parent_path) + "</p>";
+      }
+      if (anc.resolution_line) {
+        html += '<p class="resolve-line">' + esc(anc.resolution_line) + "</p>";
+      }
+      if (anc.primary_reason) {
+        html += '<p class="hint">' + esc(anc.primary_reason) + "</p>";
+      }
+      if (anc.witnesses) {
+        var wits = anc.witnesses;
+        html += '<div class="witnesses">';
+        ["a11y", "dom", "vision", "cursor"].forEach(function (k) {
+          var w = wits[k] || {};
+          var acct = w.account || (w.saw ? ("saw " + (w.name || "something")) : "saw nothing");
+          var cls = w.saw ? "wit-line" : "wit-line mute";
+          html += '<div class="' + cls + '"><b>' + k + ":</b> " + esc(acct) + "</div>";
+        });
+        html += "</div>";
+      }
+      html += "</div>";
+    });
+    html += "</div>";
+    return html;
+  }
+  function caseRecogniseBy(tr) {
+    tr = tr || {};
+    var parts = [];
+    if (tr.foreground_title) parts.push("title:" + tr.foreground_title);
+    (tr.a11y_present || []).forEach(function (el) {
+      if (el && el.name) parts.push("a11y:" + el.name + (el.control_type ? "/" + el.control_type : ""));
+    });
+    if (tr.browser_url) parts.push("url:" + tr.browser_url);
+    if (tr.halt_signature) parts.push("vision-only");
+    return parts.length ? parts.join(" · ") : "—";
   }
   function caseTriggerMono(tr) {
     tr = tr || {};
@@ -572,6 +689,25 @@
     if (check.expected) return String(check.expected);
     if (check.type) return String(check.type);
     return "—";
+  }
+  function caseCardTitle(c, index) {
+    if (c.id && /^c\d+$/i.test(c.id)) return "Case " + parseInt(c.id.slice(1), 10);
+    return "Case " + (index + 1);
+  }
+  function caseClickCountFor(stepId) {
+    var el = document.querySelector('[data-caseclicks="' + stepId + '"]');
+    return el ? (parseInt(el.value, 10) || 1) : 1;
+  }
+  function armCaseFloat(stepId) {
+    return api("/api/teach/float", {
+      name: state.current,
+      step_id: stepId,
+      case_mode: true,
+      click_count: caseClickCountFor(stepId)
+    }).then(function (d) {
+      fail(d, "could not open case bar — restart the review server if this persists");
+      toast("Side bar ready — Grab screen, then Show me / Finish case", "ok");
+    });
   }
   function caseOriginBadge(c) {
     var from = (c && c.created_from) || "halt";
@@ -729,7 +865,9 @@
       h += '<div class="card-sec halt-banner"><div class="sec-h">Unexpected screen — stopped</div><div class="sec-b">'
         + '<p class="hint" style="color:var(--attention)">' + haltMsg + "</p>";
       if (!s.case_halt.resolution) {
-        h += '<p class="hint">Resolve with <b>Show me</b> or <b>Watch me</b> below, or edit this step.</p>';
+        h += '<p class="hint">If this step was already correct (demo just had the wrong window open), dismiss below. '
+          + 'Otherwise resolve with <b>Show me</b> / <b>Watch me</b>, or teach a <b>Case</b> for this screen.</p>'
+          + '<button type="button" class="btn" data-act="haltdismiss" data-step="' + s.id + '">Keep step as taught — dismiss</button>';
       }
       h += "</div></div>";
     }
@@ -847,6 +985,50 @@
       h += "</div></div></div>";
     }
 
+    var method = s.method || "anchor";
+    h += '<div class="card-sec">' + secHdr("Ask vision", s.id, "vision") + '<div class="sec-b">'
+      + '<p class="hint"><b>Ask</b> = read the screen. <b>Reply</b> = ask a follow-up about that answer (clarify / confirm). '
+      + '<b>What should I remember?</b> + <b>Add this as a step</b> = turn the chat into this step’s description, method, and memory (e.g. <code>{recipient_email}</code>).</p>'
+      + '<div class="field"><label>Question</label>'
+      + '<input data-visionq="' + s.id + '" placeholder="What email address is visible?"></div>'
+      + '<button type="button" class="btn" data-act="visionask" data-step="' + s.id + '">Ask vision</button>';
+    (s.vision_chat || []).forEach(function (vc, vi) {
+      var facts = vc.facts || {};
+      var emails = facts.emails || [];
+      h += '<div class="vision-entry" style="margin-top:10px;border-top:1px dashed var(--rule);padding-top:8px">'
+        + '<p class="hint"><b>' + (vc.kind === "reply" ? "Reply" : "Q") + ':</b> ' + esc(vc.q || "") + "</p>"
+        + '<p style="font-size:13px;margin:4px 0">' + esc(vc.a || "") + "</p>";
+      if (emails.length) {
+        h += '<p class="hint">Found: <code>' + esc(emails.join(", ")) + "</code></p>";
+      }
+      h += '<button type="button" class="xbtn" data-act="visionrm" data-step="' + s.id + '" data-idx="' + vi + '">remove</button>'
+        + "</div>";
+    });
+    if ((s.vision_chat || []).length) {
+      h += '<div class="field" style="margin-top:12px"><label>Reply to vision <span class="hint">(optional follow-up chat — does not fill the step)</span></label>'
+        + '<textarea data-visionreply="' + s.id + '" rows="2" placeholder="e.g. Is that under Emails → Work Primary? Quote only the address."></textarea></div>'
+        + '<button type="button" class="btn" data-act="visionreply" data-step="' + s.id + '">Reply to vision</button> '
+        + '<label class="webchk" style="margin-left:8px"><input type="checkbox" data-visionregrab="' + s.id + '"> Re-grab screen</label>'
+        + '<div class="field" style="margin-top:12px"><label>What should I remember? <span class="hint">(used when you Add as step)</span></label>'
+        + '<textarea data-visionremember="' + s.id + '" rows="2" placeholder="Remember {recipient_email} from Apollo Emails; it changes each person; keep it for the next step"></textarea></div>'
+        + '<button type="button" class="btn primary" data-act="visionasstep" data-step="' + s.id + '">Add this as a step</button>';
+    }
+    h += "</div></div>";
+
+    h += '<div class="card-sec">' + secHdr("Step method", s.id, "method") + '<div class="sec-b">'
+      + '<p class="hint">Method: <b>' + esc(method) + "</b>"
+      + (method === "prompt"
+        ? ' — re-locates from your instruction every run; <b>less deterministic than an anchor</b>.'
+        : " — uses captured anchors (default).")
+      + "</p>"
+      + '<div class="field"><label>Instruction (prompt fallback)</label>'
+      + '<textarea data-promptinst="' + s.id + '" rows="3" placeholder="Hover over the email address, then click the copy icon that appears">'
+      + esc(s.prompt_instruction || "") + "</textarea></div>"
+      + '<button type="button" class="btn" data-act="prompttry" data-step="' + s.id + '">Try this instruction</button> '
+      + '<button type="button" class="btn primary" data-act="promptsave" data-step="' + s.id + '">Save as this step\'s method</button> '
+      + '<button type="button" class="xbtn" data-act="setanchor" data-step="' + s.id + '">Use anchor method</button>'
+      + "</div></div>";
+
     var photos = s.photos || [];
     var anchorList = (s.anchors && s.anchors.length) ? s.anchors.filter(Boolean) : (s.anchor ? [s.anchor] : []);
     h += '<div class="card-sec">' + secHdr("Captures & anchors", s.id, "anchors") + '<div class="sec-b">';
@@ -951,88 +1133,198 @@
     var caseList = s.cases || [];
     var caseAuth = s.case_authoring || null;
     var haltOpen = s.case_halt && !s.case_halt.resolution;
-    var canAddCase = caseList.length < 3 && !caseAuth && !haltOpen;
+    var stepReady = ["understood", "demonstrated", "approved"].indexOf(s.status) >= 0;
+    // Keep Cases visible during a halt so the user can teach the blocker screen.
+    var canAddCase = caseList.length < 3 && !caseAuth && stepReady;
+    var caseExpanded = !!(state.caseExpand && state.caseExpand[s.id]);
     if (caseList.length || caseAuth || canAddCase) {
       h += '<div class="card-sec">' + secHdr("Cases", s.id, "cases") + '<div class="sec-b case-list">';
-      if (caseAuth) {
+      h += '<p class="hint">Cases are mini-steps for blockers (e.g. Access email before the address appears). '
+        + 'Describe <b>when</b> it applies + what to do, teach with <b>Show me</b> or a <b>prompt</b>, Approve — '
+        + 'then Demo of the main step auto-switches into the case when the email is not visible yet, and continues the extract.</p>';
+      if (haltOpen) {
+        h += '<p class="hint" style="color:var(--attention)">A halt is open on this step — you can still add a Case for that screen, or dismiss the halt above.</p>';
+      }
+      if (caseAuth && (caseAuth.mode === "expandable" || caseAuth.phase === "editing" || caseAuth.phase === "needs_resolution")) {
+        var sub = caseAuth.sub_step || {};
+        h += '<div class="case-auth-banner case-expand">'
+          + '<p class="hint" style="color:var(--attention)"><b>' + esc(caseAuth.case_label || "New case") + "</b> — expandable mini-step</p>"
+          + '<div class="field"><label>When this applies</label>'
+          + '<textarea data-casewhen="' + s.id + '" rows="2" placeholder="Emails shows Access email instead of an address">'
+          + esc(caseAuth.situation_note || (caseAuth.trigger && caseAuth.trigger.description) || "") + "</textarea></div>"
+          + '<div class="field"><label>What should this case do?</label>'
+          + '<input data-casewhat="' + s.id + '" value="' + esc(sub.user_description || caseAuth.sub_description || "") + '" placeholder="Click Access email"></div>'
+          + '<div class="field"><label>Then continue with the main step (prompt)</label>'
+          + '<textarea data-casecont="' + s.id + '" rows="2" placeholder="After Access email, continue and extract {recipient_email}">'
+          + esc(sub.continue_prompt || "") + "</textarea></div>"
+          + '<label class="webchk"><input type="checkbox" data-casecontparent="' + s.id + '"'
+          + ((sub.continue_with_parent === false) ? "" : " checked") + "> After this case, run the main step</label>"
+          + '<div class="field"><label>Case method</label>'
+          + '<select data-casemethod="' + s.id + '">'
+          + '<option value="anchor"' + ((sub.method || "anchor") === "anchor" ? " selected" : "") + '>anchor (Show me)</option>'
+          + '<option value="prompt"' + (sub.method === "prompt" ? " selected" : "") + '>prompt (vision / instruction)</option>'
+          + "</select></div>"
+          + '<div class="field"><label>Prompt instruction (if prompt method)</label>'
+          + '<textarea data-caseprompt="' + s.id + '" rows="2" placeholder="Click the Access email button in the Apollo Emails section">'
+          + esc(sub.prompt_instruction || "") + "</textarea></div>";
+        if (caseAuth.draft_summary) {
+          h += '<p class="hint">Taught so far: <code>' + esc(caseAuth.draft_summary) + "</code></p>";
+        }
+        if ((sub.anchors || []).length) {
+          h += '<p class="hint"><b>Captures & witnesses</b></p>'
+            + renderCaseAnchors(sub.anchors, s.id, "draft");
+        } else {
+          h += '<p class="hint">No anchors yet — Show me the blocker click, or use prompt method.</p>';
+        }
+        h += '<button type="button" class="btn" data-act="casedraftsave" data-step="' + s.id + '">Save fields</button> '
+          + '<button type="button" class="btn" data-act="show" data-step="' + s.id + '">Show me</button> '
+          + '<button type="button" class="btn" data-act="watch" data-step="' + s.id + '">Watch me</button> '
+          + '<button type="button" class="btn" data-act="casefloat" data-step="' + s.id + '">Open side bar</button> '
+          + '<button type="button" class="btn primary" data-act="casesavedraft" data-step="' + s.id + '">Save as case</button> '
+          + '<button type="button" class="xbtn" data-act="caseauthcancel" data-step="' + s.id + '">cancel</button>'
+          + "</div>";
+      } else if (caseAuth) {
         var authMsg = "";
         if (caseAuth.mode === "capture" && caseAuth.phase === "awaiting_capture") {
           authMsg = "Set your screen to the situation you want me to recognise — capturing in a moment.";
         } else if (caseAuth.mode === "describe") {
-          authMsg = "Describe the situation in a sentence. I'll only be able to recognise it by looking, so this is less reliable than capturing it.";
+          authMsg = "Describe the situation in a sentence.";
         }
         if (caseAuth.phase === "needs_resolution") {
-          authMsg = "Teach the resolution with Show me or Watch me below — I'll derive success from what changes.";
+          authMsg = "Teach this case as its own sub-step, then Save as case.";
         }
         h += '<div class="case-auth-banner">'
-          + '<p class="hint" style="color:var(--attention)"><b>Adding a case</b>'
-          + (caseAuth.mode === "describe" ? " (describe)" : caseAuth.mode === "capture" ? " (capture)" : "")
-          + "</p>";
+          + '<p class="hint" style="color:var(--attention)"><b>Adding a case</b></p>';
         if (authMsg) h += '<p class="hint">' + esc(authMsg) + "</p>";
-        if (caseAuth.phase === "awaiting_capture") {
-          h += '<p class="case-countdown" data-casecd="' + s.id + '">3</p>';
-        }
-        if (caseAuth.trigger && caseAuth.trigger.description) {
-          h += '<p class="case-mono">"' + esc(caseAuth.trigger.description) + '"</p>';
-        }
         h += '<button type="button" class="xbtn" data-act="caseauthcancel" data-step="' + s.id + '">cancel</button>'
+          + '<button type="button" class="btn primary" data-act="casefloat" data-step="' + s.id + '">Open side bar</button>'
           + "</div>";
       }
-      caseList.forEach(function (c) {
+      caseList.forEach(function (c, ci) {
         var frame = (c.evidence && c.evidence.frame) || "";
         var thumb = caseFrameUrl(frame);
         var stats = caseStatsText(c);
         var never = !(c.times_matched || 0);
         var ob = caseOriginBadge(c);
+        var cardTitle = caseCardTitle(c, ci);
+        var sub = c.sub_step || {};
+        var openKey = s.id + ":" + c.id;
+        var open = !!(state.caseEdit && state.caseEdit[openKey]);
         h += '<div class="case-row' + (c.created_from === "user_described" ? " described-only" : "") + '">'
           + (thumb
             ? '<img class="case-thumb" src="' + esc(thumb) + '" alt="">'
             : '<span class="case-thumb empty"></span>')
           + '<div class="case-body">'
-          + '<div class="case-head"><p class="case-label">' + esc(caseLabel(c)) + "</p>"
-          + '<span class="case-origin-badge ' + ob.cls + '">' + esc(ob.text) + "</span></div>"
-          + '<p class="case-mono">' + esc(caseTriggerMono(c.trigger)) + "</p>"
-          + '<p class="case-success">Success: ' + esc(caseSuccessText(c)) + "</p>";
-        if (c.created_from === "user_described") {
-          h += '<p class="case-reliability">recognised by description only — less reliable</p>';
+          + '<div class="case-head"><p class="case-label">' + esc(cardTitle) + "</p>"
+          + '<span class="case-origin-badge ' + ob.cls + '">' + esc(ob.text) + "</span>"
+          + '<span class="pill">' + esc(sub.status || "draft") + "</span></div>"
+          + '<div class="case-detail situation"><b>When this applies</b>' + esc(caseLabel(c)) + "</div>"
+          + '<div class="case-detail"><b>Then do</b>' + esc(caseResolutionText(c)) + "</div>";
+        if (sub.continue_prompt) {
+          h += '<div class="case-detail"><b>Then continue</b>' + esc(sub.continue_prompt) + "</div>";
         }
-        if (c.halted_at_step) {
-          var seenIdx = (state.steps || []).findIndex(function (x) { return x.id === c.halted_at_step; });
-          if (seenIdx >= 0) {
-            h += '<p class="case-stats warn">seen while step ' + (seenIdx + 1) + " was running</p>";
-          }
+        var mm = caseMismatch(c);
+        if (mm) {
+          h += '<p class="hint warn" style="color:var(--attention)"><b>Mismatch:</b> ' + esc(mm.message)
+            + ' <button type="button" class="btn primary" data-act="casefixaccess" data-step="' + s.id
+            + '" data-case="' + esc(c.id) + '">Fix: use Access email prompt</button></p>';
         }
-        h += '<p class="case-stats' + (never ? " warn" : "") + '">' + esc(stats)
-          + (never ? " — may be a fluke worth deleting" : "") + "</p>"
-          + "</div>"
+        var caseAnchors = (sub.anchors || []).filter(Boolean);
+        if (caseAnchors.length && !open) {
+          var a0 = caseAnchors[0] || {};
+          var ap = a0.primary || {};
+          h += '<p class="hint">Anchor: <code>' + esc(ap.name || "target") + "</code>"
+            + (ap.pipeline ? (" via " + esc(ap.pipeline)) : "")
+            + " · " + caseAnchors.length + " capture" + (caseAnchors.length === 1 ? "" : "s")
+            + " — open Edit to see vision / a11y / dom</p>";
+        }
+        h += '<p class="case-stats' + (never ? " warn" : "") + '">' + esc(stats) + "</p>";
+        if (sub.demo) {
+          var cd = sub.demo;
+          h += '<p class="hint' + (cd.ok ? "" : " warn") + '"><b>Last case demo:</b> '
+            + esc(cd.ok ? "ok" : "failed")
+            + (cd.reason ? (" — " + esc(String(cd.reason).slice(0, 160))) : "")
+            + (cd.cascaded ? " · then continued main step" : "")
+            + "</p>";
+        }
+        if (open) {
+          h += '<div class="case-expand" style="margin-top:8px;border-top:1px dashed var(--rule);padding-top:8px">'
+            + '<div class="field"><label>When this applies</label>'
+            + '<textarea data-cedit-when="' + s.id + '" data-case="' + esc(c.id) + '" rows="2">'
+            + esc((c.trigger && c.trigger.description) || "") + "</textarea></div>"
+            + '<div class="field"><label>What this case does</label>'
+            + '<input data-cedit-what="' + s.id + '" data-case="' + esc(c.id) + '" value="'
+            + esc(sub.user_description || "") + '"></div>'
+            + '<div class="field"><label>Continue with main step (prompt)</label>'
+            + '<textarea data-cedit-cont="' + s.id + '" data-case="' + esc(c.id) + '" rows="2">'
+            + esc(sub.continue_prompt || "") + "</textarea></div>"
+            + '<div class="field"><label>Method</label><select data-cedit-method="' + s.id + '" data-case="' + esc(c.id) + '">'
+            + '<option value="anchor"' + ((sub.method || "anchor") === "anchor" ? " selected" : "") + '>anchor</option>'
+            + '<option value="prompt"' + (sub.method === "prompt" ? " selected" : "") + '>prompt</option></select></div>'
+            + '<div class="field"><label>Prompt instruction</label>'
+            + '<textarea data-cedit-prompt="' + s.id + '" data-case="' + esc(c.id) + '" rows="2" placeholder="(empty until you type — e.g. Click Access email in Apollo Emails)">'
+            + esc(sub.prompt_instruction || "") + "</textarea></div>"
+            + (mm
+              ? '<p class="hint" style="color:var(--attention)">Wrong capture stored below. Prefer <b>Fix: use Access email prompt</b>, or Show me on Access email.</p>'
+              : "")
+            + '<p class="hint"><b>Captures & witnesses</b> (same as a normal step)</p>'
+            + renderCaseAnchors(caseAnchors, s.id, c.id)
+            + '<div style="margin-top:10px">'
+            + (mm
+              ? '<button type="button" class="btn primary" data-act="casefixaccess" data-step="' + s.id + '" data-case="' + esc(c.id) + '">Fix: use Access email prompt</button> '
+              : "")
+            + '<button type="button" class="btn primary" data-act="casedemo" data-step="' + s.id + '" data-case="' + esc(c.id) + '">Demo this case</button> '
+            + '<button type="button" class="btn" data-act="casedemonocont" data-step="' + s.id + '" data-case="' + esc(c.id) + '">Demo case only</button> '
+            + '<button type="button" class="btn" data-act="caseshow" data-step="' + s.id + '" data-case="' + esc(c.id) + '">Show me (re-teach)</button> '
+            + '<button type="button" class="btn" data-act="caseprompttry" data-step="' + s.id + '" data-case="' + esc(c.id) + '">Try prompt</button> '
+            + '<button type="button" class="btn" data-act="casepatch" data-step="' + s.id + '" data-case="' + esc(c.id) + '">Save case edits</button> '
+            + '<button type="button" class="btn primary" data-act="caseapprove" data-step="' + s.id + '" data-case="' + esc(c.id) + '">Approve case</button>'
+            + "</div>"
+            + '<p class="hint"><b>Demo this case</b> runs the case, then continues the main step if that option is on. '
+            + '<b>Demo case only</b> skips the parent extract.</p>'
+            + "</div>";
+        }
+        h += "</div>"
           + '<div class="case-actions">'
+          + '<button type="button" class="btn primary" data-act="casedemo" data-step="' + s.id + '" data-case="' + esc(c.id) + '">Demo</button>'
+          + '<button type="button" class="btn" data-act="casetoggle" data-step="' + s.id + '" data-case="' + esc(c.id) + '">'
+          + (open ? "Collapse" : "Edit") + "</button>"
           + '<button type="button" class="xbtn" data-act="delcase" data-step="' + s.id + '" data-case="' + esc(c.id) + '">remove</button>'
           + "</div></div>";
       });
       if (canAddCase) {
         h += '<div class="case-add">'
-          + '<button type="button" class="btn" data-act="caseadd" data-step="' + s.id + '">Add a case</button>'
-          + '<div class="case-add-chooser" data-casechooser="' + s.id + '" hidden>'
-          + '<button type="button" class="btn primary" data-act="casecap" data-step="' + s.id + '">Capture it</button>'
-          + '<button type="button" class="btn" data-act="casedescopen" data-step="' + s.id + '">Describe it</button>'
-          + "</div>"
-          + '<div data-casedescform="' + s.id + '" hidden style="margin-top:8px">'
-          + '<div class="field"><label>Situation (one sentence)</label>'
-          + '<input data-casedesc="' + s.id + '" placeholder="A sign-in panel blocks the email list"></div>'
-          + '<button type="button" class="btn primary" data-act="casedescsubmit" data-step="' + s.id + '">Save description</button>'
-          + "</div></div>";
+          + '<button type="button" class="btn primary" data-act="caseexpandadd" data-step="' + s.id + '">'
+          + (caseExpanded ? "Hide add form" : "Add a case") + "</button>";
+        if (caseExpanded) {
+          h += '<div class="case-expand" style="margin-top:10px">'
+            + '<div class="field"><label>When this applies</label>'
+            + '<textarea data-casesituation="' + s.id + '" rows="2" placeholder="Emails shows Access email — no address yet"></textarea></div>'
+            + '<div class="field"><label>What should this case do?</label>'
+            + '<input data-casewhatnew="' + s.id + '" placeholder="Click Access email"></div>'
+            + '<div class="field"><label>Then continue with main step</label>'
+            + '<textarea data-casecontnew="' + s.id + '" rows="2" placeholder="After Access email, extract {recipient_email}"></textarea></div>'
+            + '<div class="field"><label>Resolution clicks</label>'
+            + '<select data-caseclicks="' + s.id + '"><option value="1">1</option><option value="2">2</option></select></div>'
+            + '<button type="button" class="btn primary" data-act="casebegin" data-step="' + s.id + '">Start teaching this case</button> '
+            + '<button type="button" class="btn" data-act="casecap" data-step="' + s.id + '">Or capture screen first</button>'
+            + "</div>";
+        }
+        h += "</div>";
       }
       h += "</div></div>";
     }
     if (s.status === "understood" || s.status === "demonstrated" || s.status === "approved") {
+      if (!caseAuth) {
       var mode = state.demoMode[s.id] || "manual";
       h += '<div class="modes">'
         + '<button class="mode" data-mode="manual" data-step="' + s.id + '" aria-pressed="' + (mode !== "replay") + '"><b>I\'ll set the screen up</b><span>Faster when you are already there</span></button>'
         + '<button class="mode" data-mode="replay" data-step="' + s.id + '" aria-pressed="' + (mode === "replay") + '"><b>Run the earlier steps for me</b><span>Reaches the state automatically</span></button></div>'
         + '<div class="field"><label>Test values (optional JSON)</label>'
         + '<input data-tvals="' + s.id + '" placeholder=\'{"filename":"C:\\\\tmp\\\\a.txt"}\'></div>';
+      }
     }
-    if (s.reflection) {
+    if (s.reflection && !caseAuth) {
       var r = s.reflection;
       var bad = r.matches_understanding === false;
       h += '<div class="card-sec' + (bad ? " reflect bad" : "") + '">'
@@ -1057,17 +1349,23 @@
         + '<button class="btn" data-act="show" data-step="' + s.id + '">Show me instead</button>'
         + '<button class="btn" data-act="watch" data-step="' + s.id + '">Watch me</button>';
     } else if (s.understanding && (s.status === "draft" || s.status === "questioning")) {
+      var methodNow = s.method || "anchor";
       var anchorN = (s.anchors && s.anchors.length) ? s.anchors.filter(Boolean).length : (s.anchor ? 1 : 0);
       var clicksNeeded = s.click_count || 1;
-      var captureDone = anchorN >= clicksNeeded;
+      var captureDone = methodNow === "prompt" || anchorN >= clicksNeeded;
       if (captureDone) {
         h += '<button class="btn primary" data-act="okund" data-step="' + s.id + '">Looks right</button>'
-          + '<button class="btn" data-act="rejund" data-step="' + s.id + '">Not quite</button>'
-          + '<button class="btn" data-act="show" data-step="' + s.id + '">Show me again</button>';
+          + '<button class="btn" data-act="rejund" data-step="' + s.id + '">Not quite</button>';
+        if (methodNow !== "prompt") {
+          h += '<button class="btn" data-act="show" data-step="' + s.id + '">Show me again</button>';
+        }
       } else {
         h += '<button class="btn primary" data-act="show" data-step="' + s.id + '">Show me</button>';
       }
       h += '<button class="btn" data-act="watch" data-step="' + s.id + '">Watch me</button>';
+      if (methodNow === "prompt") {
+        h += '<p class="hint" style="margin-top:8px">Prompt / vision step — no Show me required. Approve understanding, then <b>Demo this step</b> on another person to check the email changes.</p>';
+      }
     } else if (s.status === "draft" || s.status === "questioning") {
       h += '<button class="btn primary" data-act="train" data-step="' + s.id + '">Ask me what you need</button>'
         + '<button class="btn" data-act="show" data-step="' + s.id + '">Show me on screen</button>'
@@ -1314,21 +1612,94 @@
       p = api("/api/teach/answer", { name: name, step_id: id, question: qtext3, answer: reply3 }).then(function (d) {
         fail(d, "answer failed");
       });
+    } else if (kind === "visionask") {
+      var vq = document.querySelector('[data-visionq="' + id + '"]');
+      var vtxt = vq ? vq.value.trim() : "";
+      if (!vtxt) { toast("Type a question for vision", "error"); done(); return; }
+      toast("Side bar opened — click Focus here, then Ask vision.", "ok");
+      p = api("/api/teach/float", {
+        name: name, step_id: id, vision_mode: true, question: vtxt
+      }).then(function (d) {
+        fail(d, "could not open side bar");
+      });
+    } else if (kind === "visionreply") {
+      var vr = document.querySelector('[data-visionreply="' + id + '"]');
+      var rtxt = vr ? vr.value.trim() : "";
+      if (!rtxt) { toast("Type a follow-up for vision", "error"); done(); return; }
+      var regrabEl = document.querySelector('[data-visionregrab="' + id + '"]');
+      p = api("/api/teach/vision-reply", {
+        name: name, step_id: id, reply: rtxt, regrab: !!(regrabEl && regrabEl.checked)
+      }).then(function (d) {
+        fail(d, "vision reply failed");
+        toast("Vision replied", "ok");
+      });
+    } else if (kind === "visionasstep") {
+      var rem = document.querySelector('[data-visionremember="' + id + '"]');
+      p = api("/api/teach/vision-as-step", {
+        name: name, step_id: id, remember_prompt: rem ? rem.value.trim() : ""
+      }).then(function (d) {
+        fail(d, "could not add as step");
+        var filled = (d && d.filled) || {};
+        toast(filled.produces && filled.produces.length
+          ? "Step filled — remembering " + filled.produces.join(", ")
+          : "Step filled from vision chat", "ok");
+      });
+    } else if (kind === "visionrm") {
+      p = api("/api/teach/vision-remove", {
+        name: name, step_id: id, index: parseInt(btn.getAttribute("data-idx") || "0", 10)
+      }).then(function (d) { fail(d, "could not remove"); });
+    } else if (kind === "prompttry") {
+      var pinst = document.querySelector('[data-promptinst="' + id + '"]');
+      p = api("/api/teach/prompt-try", {
+        name: name, step_id: id, instruction: pinst ? pinst.value.trim() : ""
+      }).then(function (d) {
+        fail(d, "prompt try failed");
+        toast("Prompt trial recorded — see reflection", "ok");
+      });
+    } else if (kind === "promptsave") {
+      var pinst2 = document.querySelector('[data-promptinst="' + id + '"]');
+      var itxt = pinst2 ? pinst2.value.trim() : "";
+      if (!itxt) { toast("Write an instruction first", "error"); done(); return; }
+      p = api("/api/teach/prompt-save", { name: name, step_id: id, instruction: itxt }).then(function (d) {
+        fail(d, "could not save prompt method");
+        toast("Saved as prompt method", "ok");
+      });
+    } else if (kind === "setanchor") {
+      p = api("/api/teach/set-method", { name: name, step_id: id, method: "anchor" }).then(function (d) {
+        fail(d, "could not switch method");
+      });
     } else if (kind === "show") {
+      var subEl0 = document.querySelector('[data-casesubdesc="' + id + '"]');
+      var subTxt0 = subEl0 ? subEl0.value.trim() : "";
       var clkEl = document.querySelector('[data-clicks="' + id + '"]');
       var ccSel = clkEl ? parseInt(clkEl.value, 10) || 1 : (s.click_count || 1);
+      if (s.case_authoring && s.case_authoring.click_count) {
+        ccSel = parseInt(s.case_authoring.click_count, 10) || ccSel;
+      }
       var isChain = ccSel === 2;
       var sinceAt = (s.last_capture && s.last_capture.at) || "";
-      toast(isChain
-        ? "Capture bar on the left — after countdown, click Extensions then Apollo (~25s)."
-        : "Capture bar on the left — point at the control, then press Show me.");
-      p = api("/api/teach/float", { name: name, step_id: id, click_count: ccSel }).then(function (d) {
-        fail(d, "could not open capture bar");
-        if ((d.click_count || 1) === 2) {
-          toast("Float bar ready — press Show me (2), then do both clicks.", "ok");
-        }
-        return pollCaptureResult(id, sinceAt);
-      });
+      toast(s.case_authoring
+        ? "Side bar — Focus here, then Show me the Access email / blocker click."
+        : (isChain
+          ? "Capture bar on the left — after countdown, click Extensions then Apollo (~25s)."
+          : "Capture bar on the left — point at the control, then press Show me."));
+      var openBar = function () {
+        return api("/api/teach/float", {
+          name: name, step_id: id, click_count: ccSel, case_mode: !!s.case_authoring
+        }).then(function (d) {
+          fail(d, "could not open capture bar");
+          if ((d.click_count || 1) === 2 && !s.case_authoring) {
+            toast("Float bar ready — press Show me (2), then do both clicks.", "ok");
+          }
+          return pollCaptureResult(id, sinceAt);
+        });
+      };
+      p = subTxt0
+        ? api("/api/teach/case-substep", { name: name, step_id: id, description: subTxt0 }).then(function (d) {
+          fail(d, "could not save sub-step name");
+          return openBar();
+        })
+        : openBar();
     } else if (kind === "savesec") {
       var sec = btn.getAttribute("data-sec") || "basics";
       p = saveStepSection(id, sec);
@@ -1431,6 +1802,11 @@
         if (d.pending_attach) toast("Choose which step this case belongs to", "ok");
         else toast(d.remembered ? "Case remembered for this step" : "One-off — not remembered", "ok");
       });
+    } else if (kind === "haltdismiss") {
+      p = api("/api/teach/case-halt-dismiss", { name: name, step_id: id }).then(function (d) {
+        fail(d, "could not dismiss halt");
+        toast("Halt dismissed — step kept as taught", "ok");
+      });
     } else if (kind === "caseattachyes") {
       p = api("/api/teach/case-attach", { name: name, halting_step_id: id, answer: "yes" }).then(function (d) {
         fail(d, "could not attach case");
@@ -1466,22 +1842,195 @@
         fail(d, "could not remove case");
         toast("Case removed", "ok");
       });
+    } else if (kind === "caseshow") {
+      var cidShow = btn.getAttribute("data-case") || "";
+      state.caseEdit = state.caseEdit || {};
+      state.caseEdit[id + ":" + cidShow] = true;
+      p = api("/api/teach/case-reteach", {
+        name: name, step_id: id, case_id: cidShow
+      }).then(function (d) {
+        fail(d, "could not start case re-teach");
+        toast("Side bar — Focus here, then Show me this case's click", "ok");
+        return api("/api/teach/float", {
+          name: name, step_id: id, case_mode: true, click_count: d.click_count || 1
+        }).then(function (f) {
+          fail(f, "could not open side bar");
+          return pollCaptureResult(id, "");
+        });
+      });
+    } else if (kind === "caseprompttry") {
+      var cidP = btn.getAttribute("data-case") || "";
+      var promTry = document.querySelector('[data-cedit-prompt="' + id + '"][data-case="' + CSS.escape(cidP) + '"]');
+      p = api("/api/teach/case-prompt-try", {
+        name: name, step_id: id, case_id: cidP,
+        instruction: promTry ? promTry.value.trim() : ""
+      }).then(function (d) {
+        fail(d, "case prompt try failed");
+        toast("Case prompt saved — method set to prompt", "ok");
+      });
+    } else if (kind === "caseexpandadd") {
+      state.caseExpand = state.caseExpand || {};
+      state.caseExpand[id] = !state.caseExpand[id];
+      renderSteps();
+      done();
+      return;
+    } else if (kind === "casebegin") {
+      var sitB = document.querySelector('[data-casesituation="' + id + '"]');
+      var whatB = document.querySelector('[data-casewhatnew="' + id + '"]');
+      var contB = document.querySelector('[data-casecontnew="' + id + '"]');
+      p = api("/api/teach/case-begin", {
+        name: name,
+        step_id: id,
+        when_applies: sitB ? sitB.value.trim() : "",
+        what_to_do: whatB ? whatB.value.trim() : "",
+        continue_prompt: contB ? contB.value.trim() : "",
+        click_count: caseClickCountFor(id)
+      }).then(function (d) {
+        fail(d, "could not start case");
+        state.caseExpand[id] = false;
+        toast((d.case_label || "Case") + " — teach with Show me or prompt", "ok");
+      });
+    } else if (kind === "casedraftsave") {
+      var whenEl = document.querySelector('[data-casewhen="' + id + '"]');
+      var whatEl = document.querySelector('[data-casewhat="' + id + '"]');
+      var contEl = document.querySelector('[data-casecont="' + id + '"]');
+      var contPar = document.querySelector('[data-casecontparent="' + id + '"]');
+      var methEl = document.querySelector('[data-casemethod="' + id + '"]');
+      var promEl = document.querySelector('[data-caseprompt="' + id + '"]');
+      p = api("/api/teach/case-draft-patch", {
+        name: name,
+        step_id: id,
+        when_applies: whenEl ? whenEl.value.trim() : "",
+        what_to_do: whatEl ? whatEl.value.trim() : "",
+        continue_prompt: contEl ? contEl.value.trim() : "",
+        continue_with_parent: !!(contPar && contPar.checked),
+        method: methEl ? methEl.value : "anchor",
+        prompt_instruction: promEl ? promEl.value.trim() : ""
+      }).then(function (d) {
+        fail(d, "could not save case fields");
+        toast("Case fields saved", "ok");
+      });
+    } else if (kind === "casesavedraft") {
+      var whenEl2 = document.querySelector('[data-casewhen="' + id + '"]');
+      var whatEl2 = document.querySelector('[data-casewhat="' + id + '"]');
+      var contEl2 = document.querySelector('[data-casecont="' + id + '"]');
+      var contPar2 = document.querySelector('[data-casecontparent="' + id + '"]');
+      var methEl2 = document.querySelector('[data-casemethod="' + id + '"]');
+      var promEl2 = document.querySelector('[data-caseprompt="' + id + '"]');
+      p = api("/api/teach/case-draft-patch", {
+        name: name,
+        step_id: id,
+        when_applies: whenEl2 ? whenEl2.value.trim() : "",
+        what_to_do: whatEl2 ? whatEl2.value.trim() : "",
+        continue_prompt: contEl2 ? contEl2.value.trim() : "",
+        continue_with_parent: !!(contPar2 && contPar2.checked),
+        method: methEl2 ? methEl2.value : "anchor",
+        prompt_instruction: promEl2 ? promEl2.value.trim() : ""
+      }).then(function (d) {
+        fail(d, "could not save case fields");
+        return api("/api/teach/case-save-draft", { name: name, step_id: id }).then(function (fin) {
+          fail(fin, "could not save case — teach Show me or set a prompt first");
+          toast("Saved " + ((fin.case && fin.case.id) || "case"), "ok");
+        });
+      });
+    } else if (kind === "casetoggle") {
+      var ck = id + ":" + (btn.getAttribute("data-case") || "");
+      state.caseEdit = state.caseEdit || {};
+      state.caseEdit[ck] = !state.caseEdit[ck];
+      renderSteps();
+      done();
+      return;
+    } else if (kind === "casepatch") {
+      var cid = btn.getAttribute("data-case") || "";
+      var w1 = document.querySelector('[data-cedit-when="' + id + '"][data-case="' + CSS.escape(cid) + '"]');
+      var w2 = document.querySelector('[data-cedit-what="' + id + '"][data-case="' + CSS.escape(cid) + '"]');
+      var w3 = document.querySelector('[data-cedit-cont="' + id + '"][data-case="' + CSS.escape(cid) + '"]');
+      var w4 = document.querySelector('[data-cedit-method="' + id + '"][data-case="' + CSS.escape(cid) + '"]');
+      var w5 = document.querySelector('[data-cedit-prompt="' + id + '"][data-case="' + CSS.escape(cid) + '"]');
+      p = api("/api/teach/case-patch", {
+        name: name, step_id: id, case_id: cid,
+        when_applies: w1 ? w1.value.trim() : "",
+        what_to_do: w2 ? w2.value.trim() : "",
+        continue_prompt: w3 ? w3.value.trim() : "",
+        method: w4 ? w4.value : "anchor",
+        prompt_instruction: w5 ? w5.value.trim() : ""
+      }).then(function (d) {
+        fail(d, "could not patch case");
+        toast("Case updated", "ok");
+      });
+    } else if (kind === "caseapprove") {
+      p = api("/api/teach/case-approve", {
+        name: name, step_id: id, case_id: btn.getAttribute("data-case") || ""
+      }).then(function (d) {
+        fail(d, "could not approve case");
+        toast("Case approved", "ok");
+      });
+    } else if (kind === "casefixaccess") {
+      var cidFix = btn.getAttribute("data-case") || "";
+      p = api("/api/teach/case-fix-access-email", {
+        name: name, step_id: id, case_id: cidFix
+      }).then(function (d) {
+        fail(d, "could not fix case");
+        toast(d.message || "Case fixed to Access email prompt", "ok");
+      });
+    } else if (kind === "casedemo" || kind === "casedemonocont") {
+      var cidDemo = btn.getAttribute("data-case") || "";
+      toast("Opening side bar…", "ok");
+      p = api("/api/teach/float", {
+        name: name, step_id: id, click_count: 1, case_id: cidDemo
+      }).then(function () {
+        return api("/api/teach/focus-target", {
+          name: name, step_id: id, case_id: cidDemo
+        }).then(function (foc) {
+          if (foc && foc.ok) toast("Focused " + (foc.title || "target"), "ok");
+          else toast((foc && foc.reason) || "Use Focus here on the side bar, then continue", "ok");
+          return foc;
+        });
+      }).then(function () {
+        if (!window.confirm(
+          "Side bar is open (Focus here if Chrome/Apollo is not in front).\n\n"
+          + "Set up the blocker screen (e.g. Access email visible), then click OK to demo this case."
+        )) {
+          throw new Error("cancelled");
+        }
+      }).then(function () {
+        toast("Demoing case…", "ok");
+        return api("/api/teach/case-demo", {
+          name: name,
+          step_id: id,
+          case_id: cidDemo,
+          continue_parent: kind === "casedemo" ? null : false
+        }).then(function (d) {
+          fail(d, "case demo failed");
+          var dem = d.demo || {};
+          if (dem.ok) {
+            toast(
+              dem.cascaded
+                ? "Case demo ok — continued main step"
+                : ("Case demo ok" + (dem.observed ? (": " + String(dem.observed).slice(0, 60)) : "")),
+              "ok"
+            );
+          } else {
+            toast("Case demo failed: " + (dem.reason || d.error || "unknown"), "err");
+          }
+        });
+      });
     } else if (kind === "caseadd") {
-      var chooser = document.querySelector('[data-casechooser="' + id + '"]');
-      if (chooser) chooser.hidden = false;
+      state.caseExpand = state.caseExpand || {};
+      state.caseExpand[id] = true;
+      renderSteps();
       done();
       return;
     } else if (kind === "casecap") {
-      p = api("/api/teach/case-capture-start", { name: name, step_id: id }).then(function (d) {
+      var caseClicks = caseClickCountFor(id);
+      var sitEl = document.querySelector('[data-casesituation="' + id + '"]');
+      var situation = sitEl ? sitEl.value.trim() : "";
+      p = api("/api/teach/case-capture-start", {
+        name: name, step_id: id, click_count: caseClicks, situation: situation
+      }).then(function (d) {
         fail(d, "could not start capture");
-        return reloadTeach().then(function () {
-          return runCaseCaptureCountdown(id);
-        }).then(function () {
-          return api("/api/teach/case-capture-frame", { name: name, step_id: id });
-        }).then(function (cap) {
-          fail(cap, "capture failed");
-          toast(cap.message || "Screen captured — teach the resolution", "ok");
-        });
+        toast((d.case_label || "Case") + " — opening side bar…", "ok");
+        return armCaseFloat(id);
       });
     } else if (kind === "casedescopen") {
       var form = document.querySelector('[data-casedescform="' + id + '"]');
@@ -1493,15 +2042,34 @@
     } else if (kind === "casedescsubmit") {
       var descEl = document.querySelector('[data-casedesc="' + id + '"]');
       var descTxt = descEl ? descEl.value.trim() : "";
-      if (!descTxt) { toast("Describe the situation in a sentence", "error"); done(); return; }
-      p = api("/api/teach/case-describe", { name: name, step_id: id, description: descTxt }).then(function (d) {
+      if (!descTxt) { toast("Describe when this case applies", "error"); done(); return; }
+      var caseClicks2 = caseClickCountFor(id);
+      p = api("/api/teach/case-describe", {
+        name: name, step_id: id, description: descTxt, click_count: caseClicks2
+      }).then(function (d) {
         fail(d, "could not save description");
-        toast(d.reliability_warning || "Description saved — teach the resolution", "ok");
+        toast((d.case_label || "Case") + " — teach resolution on the side bar", "ok");
+        return armCaseFloat(id);
       });
     } else if (kind === "caseauthcancel") {
       p = api("/api/teach/case-authoring-cancel", { name: name, step_id: id }).then(function (d) {
         fail(d, "could not cancel");
         toast(d.cancelled ? "Case authoring cancelled" : "Done", "ok");
+      });
+    } else if (kind === "casefloat") {
+      p = armCaseFloat(id);
+    } else if (kind === "casefinish") {
+      var subEl = document.querySelector('[data-casesubdesc="' + id + '"]');
+      var subTxt = subEl ? subEl.value.trim() : "";
+      var prep = subTxt
+        ? api("/api/teach/case-substep", { name: name, step_id: id, description: subTxt })
+        : Promise.resolve({ ok: true });
+      p = prep.then(function (d) {
+        fail(d, "could not save sub-step name");
+        return api("/api/teach/case-finish", { name: name, step_id: id }).then(function (fin) {
+          fail(fin, "could not save case — Show me the click first");
+          toast("Saved " + ((fin.case && fin.case.id) || "case"), "ok");
+        });
       });
     }
     p.then(reloadTeach).catch(function (e) { toast(e.message, "error"); }).then(done);

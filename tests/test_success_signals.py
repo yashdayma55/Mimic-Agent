@@ -264,6 +264,28 @@ def test_part5_verify_structural():
     with patch("success_signals._foreground_for_success_check", return_value="Omid Ghiam | LinkedIn - Google Chrome"):
         v5 = verify_success_check(profile_step, os_input_calls=2)
     _pass("accepts any linkedin chrome profile when profile varies", v5.get("ok") is True, v5)
+
+    # Extensions puzzle-piece menu stays foreground after a successful Apollo open.
+    with patch("ui_runner.foreground_title", return_value="Extensions"), \
+         patch(
+             "success_signals._top_level_window_titles",
+             return_value=[
+                 "Extensions",
+                 "Joel Jang | LinkedIn - Google Chrome",
+                 "Cursor Agents",
+             ],
+         ):
+        v6 = verify_success_check(
+            profile_step,
+            before_demo={"foreground_title": "Joel Jang | LinkedIn - Google Chrome", "a11y_elements": []},
+            after_demo={
+                "foreground_title": "Extensions",
+                "window_titles": ["Extensions", "Joel Jang | LinkedIn - Google Chrome"],
+                "a11y_elements": [],
+            },
+            os_input_calls=2,
+        )
+    _pass("ignores Extensions popup when LinkedIn Chrome is open", v6.get("ok") is True, v6)
     print("PART 5 ALL CHECKS PASSED")
 
 

@@ -39,16 +39,77 @@ def _top_level_window_titles() -> list[str]:
         return []
 
 
+def _is_ephemeral_browser_title(title: str | None) -> bool:
+    """Chrome menus/popups that steal focus but are not the real app outcome."""
+    t = (title or "").strip().lower()
+    if not t:
+        return True
+    if t in {
+        "extensions",
+        "extension",
+        "apps",
+        "bookmarks",
+        "history",
+        "downloads",
+        "new tab",
+        "settings",
+    }:
+        return True
+    # Puzzle-piece menu is often titled just "Extensions" (no Chrome/LinkedIn).
+    if t.startswith("extensions") and "linkedin" not in t and "chrome" not in t:
+        return True
+    return False
+
+
 def _foreground_for_success_check(expected: str | None = None) -> str:
-    """Prefer a real app window over MimicAgent / review UI stealing focus."""
+    """Prefer a real app window over MimicAgent / review UI / Chrome popup stealing focus."""
     from app_ui_guard import is_own_window
     from ui_runner import _titles_match, foreground_title
 
     actual = foreground_title()
-    if actual and not is_own_window(actual):
+    candidates = _top_level_window_titles()
+
+    # Exact expected match among open windows first.
+    if expected:
+        for title in candidates:
+            if _titles_match(expected, title):
+                return title
+
+    # Extensions puzzle-piece menu often stays foreground after Apollo opens.
+    # When success is a LinkedIn Chrome *profile* tab, prefer that over the popup.
+    if is_linkedin_chrome_title(expected) and (
+        _is_ephemeral_browser_title(actual) or is_own_window(actual) or not actual
+    ):
+        for title in candidates:
+            if is_linkedin_chrome_title(title):
+                return title
+
+    if actual and not is_own_window(actual) and not _is_ephemeral_browser_title(actual):
         return actual
 
-    candidates = _top_level_window_titles()
+    if actual and (_is_ephemeral_browser_title(actual) or is_own_window(actual)):
+        if expected:
+            for title in candidates:
+                if _titles_match(expected, title):
+                    return title
+            exp_low = (expected or "").lower()
+            if "linkedin" in exp_low:
+                for title in candidates:
+                    tl = title.lower()
+                    if expected and _titles_match(expected, title):
+                        return title
+                    # Prefer titles that look like the expected kind (sidebar vs profile).
+                    if "sidebar" in exp_low and "sidebar" in tl:
+                        return title
+                    if is_linkedin_chrome_title(expected) and is_linkedin_chrome_title(title):
+                        return title
+        for title in candidates:
+            if is_linkedin_chrome_title(title):
+                return title
+        for title in candidates:
+            if title and not _is_ephemeral_browser_title(title) and not is_own_window(title):
+                return title
+
     if expected:
         for title in candidates:
             if _titles_match(expected, title):
@@ -58,6 +119,8 @@ def _foreground_for_success_check(expected: str | None = None) -> str:
             for title in candidates:
                 tl = title.lower()
                 if "linkedin" in tl and ("chrome" in tl or "google chrome" in tl):
+                    return title
+                if "linkedin" in tl and "sidebar" in exp_low and "sidebar" in tl:
                     return title
     for title in candidates:
         if "linkedin" in title.lower() and "chrome" in title.lower():
@@ -615,6 +678,19 @@ def verify_success_check(
                     "cost": "free",
                 }
         actual = _foreground_for_success_check(expected)
+        # Demo after-snapshot often still shows the Extensions popup; LinkedIn may be in window_titles.
+        if (
+            after_demo
+            and not _foreground_title_matches(step, expected, actual)
+            and (
+                _is_ephemeral_browser_title(actual)
+                or _is_ephemeral_browser_title((after_demo or {}).get("foreground_title") or "")
+            )
+        ):
+            for title in (after_demo or {}).get("window_titles") or []:
+                if _foreground_title_matches(step, expected, title):
+                    actual = title
+                    break
         ok = bool(expected) and _foreground_title_matches(step, expected, actual)
         if ok:
             if step_profile_varies(step) and is_linkedin_chrome_title(actual):

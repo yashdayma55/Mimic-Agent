@@ -41,6 +41,13 @@ def _pending_questions(step: TaughtStep) -> list:
 
 
 def _can_ask_question(step: TaughtStep) -> bool:
+    try:
+        from case_authoring import case_authoring_resolving
+
+        if case_authoring_resolving(step):
+            return False
+    except Exception:
+        pass
     return len(_pending_questions(step)) < MAX_QUESTIONS_PER_ROUND
 
 
@@ -168,6 +175,13 @@ def _ask_success_fallback(step: TaughtStep) -> None:
 
 def _maybe_finalize_step_capture(wf: TaughtWorkflow, step_id: str) -> dict | None:
     step = get_step(wf, step_id)
+    try:
+        from case_authoring import case_authoring_resolving
+
+        if case_authoring_resolving(step):
+            return None
+    except Exception:
+        pass
     if not _capture_complete(step):
         return None
     from success_signals import finalize_step_capture
@@ -180,6 +194,21 @@ def _maybe_finalize_step_capture(wf: TaughtWorkflow, step_id: str) -> dict | Non
         _ask_success_fallback(step)
     save_taught(wf)
     return out
+
+
+def _user_success_text(answer: str) -> str:
+    text = (answer or "").strip()
+    low = text.lower()
+    if low.startswith("yes"):
+        return ""
+    if low.startswith("partly"):
+        if ":" in text:
+            text = text.split(":", 1)[-1].strip()
+        else:
+            text = re.sub(r"^partly\s*", "", text, flags=re.I).strip()
+    if low.startswith("no"):
+        return ""
+    return text
 
 
 def handle_success_confirm(wf: TaughtWorkflow, step_id: str, answer: str) -> TaughtStep:
@@ -203,10 +232,8 @@ def handle_success_confirm(wf: TaughtWorkflow, step_id: str, answer: str) -> Tau
             "kind": (signal or {}).get("kind"),
         }
     else:
-        user_text = answer.strip()
-        if low.startswith("partly"):
-            user_text = answer.split(":", 1)[-1].strip() if ":" in answer else answer.strip()
-        understanding["success_check"] = user_text or answer.strip()
+        user_text = _user_success_text(answer) or answer.strip()
+        understanding["success_check"] = user_text
         understanding["success_source"] = "user"
         understanding["success_candidates"] = list(step.success_candidates or [])
     step.understanding = understanding
@@ -534,14 +561,27 @@ def handle_show_confirm(wf: TaughtWorkflow, step_id: str, answer: str) -> Taught
         anchor["confirmed"] = False
     else:
         anchor["confirmed_note"] = text
-        if text and len(text) > 3:
-            step.user_description = step.user_description or text
+        try:
+            from case_authoring import case_authoring_active
+
+            if text and len(text) > 3 and not case_authoring_active(step):
+                step.user_description = step.user_description or text
+        except Exception:
+            if text and len(text) > 3:
+                step.user_description = step.user_description or text
     while len(step.anchors) <= sub_index:
         step.anchors.append(None)
     step.anchors[sub_index] = anchor
     sync_step_anchors(step)
     cc = int(getattr(step, "click_count", 1) or 1)
-    if yes and cc == 2:
+    case_active = False
+    try:
+        from case_authoring import case_authoring_active
+
+        case_active = case_authoring_active(step)
+    except Exception:
+        pass
+    if yes and cc == 2 and not case_active:
         if sub_index == 0:
             _ask_chain_second(step, anchor)
         elif sub_index == 1:
@@ -618,14 +658,22 @@ def process_chain_batch(wf: TaughtWorkflow, step_id: str, session: dict) -> dict
     step = get_step(wf, step_id)
     cc = int(getattr(step, "click_count", 1) or 1)
     got = len(_filled_anchors(step))
+    case_resolving = False
+    try:
+        from case_authoring import case_authoring_resolving
+
+        case_resolving = case_authoring_resolving(step)
+    except Exception:
+        pass
     if got >= cc:
-        _ask_chain_summary(step)
-        cc_state = dict(step.chain_capture or {})
-        cc_state.pop("prompt", None)
-        cc_state["phase"] = "complete"
-        step.chain_capture = cc_state or None
-        finalize_out = _maybe_finalize_step_capture(wf, step_id)
-    elif got == 1 and cc == 2:
+        if not case_resolving:
+            _ask_chain_summary(step)
+            cc_state = dict(step.chain_capture or {})
+            cc_state.pop("prompt", None)
+            cc_state["phase"] = "complete"
+            step.chain_capture = cc_state or None
+            finalize_out = _maybe_finalize_step_capture(wf, step_id)
+    elif got == 1 and cc == 2 and not case_resolving:
         heard = int(session.get("heard") or session.get("got") or 0)
         step.chain_capture = dict(step.chain_capture or {})
         step.chain_capture["phase"] = "incomplete"
@@ -678,6 +726,35 @@ def _record_show_capture(wf: TaughtWorkflow, step_id: str, result: dict) -> dict
         halt_done = try_complete_halt_from_show(wf, step_id, out)
         if halt_done:
             out["case_halt_resolution"] = halt_done
+    except Exception:
+        pass
+    try:
+        from case_authoring import try_complete_user_case_from_show
+
+        user_done = try_complete_user_case_from_show(wf, step_id, out)
+        if user_done:
+            out["case_authoring_complete"] = user_done
+    except Exception as e:
+        out["case_authoring_error"] = str(e)
+    try:
+        from case_steps import sync_draft_from_step_capture
+
+        draft = sync_draft_from_step_capture(wf, step_id)
+        if draft:
+            out["case_draft_synced"] = draft
+    except Exception:
+        pass
+    return out
+
+
+def _record_watch_capture(wf: TaughtWorkflow, step_id: str, result: dict) -> dict:
+    out = _record_capture(wf, step_id, "watch", result)
+    try:
+        from case_authoring import try_complete_user_case_from_watch
+
+        user_done = try_complete_user_case_from_watch(wf, step_id, out)
+        if user_done:
+            out["case_authoring_complete"] = user_done
     except Exception:
         pass
     return out
@@ -761,11 +838,19 @@ def answer_show(wf: TaughtWorkflow, step_id: str, **capture_kwargs) -> dict:
     }
     out = capture_show(wf, step_id, sub_index=sub_index, **cap_kw)
     result = apply_show_witnesses(wf, step_id, out, sub_index=sub_index)
-    if _capture_complete(get_step(wf, step_id)):
-        fin = _maybe_finalize_step_capture(wf, step_id)
-        if fin:
-            result["after_frame"] = fin.get("after_frame")
-            result["success_candidates"] = fin.get("success_candidates")
+    resolving = False
+    try:
+        from case_authoring import case_authoring_resolving
+
+        resolving = case_authoring_resolving(get_step(wf, step_id))
+    except Exception:
+        pass
+    if not resolving:
+        if _capture_complete(get_step(wf, step_id)):
+            fin = _maybe_finalize_step_capture(wf, step_id)
+            if fin:
+                result["after_frame"] = fin.get("after_frame")
+                result["success_candidates"] = fin.get("success_candidates")
     if click_count_hint:
         result["click_count_hint"] = click_count_hint
         result["chain_prompt"] = click_count_hint
@@ -1253,6 +1338,10 @@ def _closed_verb(text: str) -> str | None:
     blob = (text or "").lower()
     if re.search(r"\bpaste\b|\bctrl\s*\+\s*v\b", blob):
         return "paste"
+    if re.search(r"\b(click|select|press|tap)\b", blob) and re.search(
+        r"\b(copy\s+button|copy\s+icon|button.*\bcopy\b|click.*\bcopy\b)\b", blob
+    ):
+        return "click"
     if re.search(r"\bcopy\b|\bctrl\s*\+\s*c\b", blob) and not re.search(r"\bcopy[_ ]?file\b", blob):
         return "copy"
     if re.search(r"\b(go\s*to|navigate|goto)\b", blob):
@@ -1366,6 +1455,22 @@ def resolve_action(step: TaughtStep) -> dict | None:
             return act
     if re.search(r"\bpaste\b|\bctrl\s*\+\s*v\b", blob):
         return {"action": "paste", "target_desc": target}
+    if re.search(r"\bclick\b", blob) or re.search(
+        r"\b(copy\s+button|copy\s+icon|button.*\bcopy\b|click.*\bcopy\b)\b", blob
+    ):
+        action = {
+            "action": "click",
+            "target_desc": target,
+            "window_title": "Notepad" if "notepad" in blob or "editor" in blob or "apollo" not in blob else None,
+        }
+        if step.anchor and (step.anchor.get("primary") or {}).get("name"):
+            action["elem_name"] = step.anchor["primary"]["name"]
+            action["elem_type"] = (step.anchor.get("primary") or {}).get("control_type")
+        if "editor" in blob or "text" in blob:
+            action["elem_name"] = "Text editor"
+            action["elem_type"] = "Document"
+            action["window_title"] = "Notepad"
+        return action
     if re.search(r"\bcopy\b|\bctrl\s*\+\s*c\b", blob) and not re.search(r"\bcopy[_ ]?file\b", blob):
         return {"action": "copy", "target_desc": target}
     if re.search(r"\btype\b", blob):
@@ -1393,20 +1498,6 @@ def resolve_action(step: TaughtStep) -> dict | None:
             "window_title": "Notepad",
             "target_desc": "the text editing area",
         }
-    if re.search(r"\bclick\b", blob):
-        action = {
-            "action": "click",
-            "target_desc": target,
-            "window_title": "Notepad" if "notepad" in blob or "editor" in blob or "apollo" not in blob else None,
-        }
-        if step.anchor and (step.anchor.get("primary") or {}).get("name"):
-            action["elem_name"] = step.anchor["primary"]["name"]
-            action["elem_type"] = (step.anchor.get("primary") or {}).get("control_type")
-        if "editor" in blob or "text" in blob:
-            action["elem_name"] = "Text editor"
-            action["elem_type"] = "Document"
-            action["window_title"] = "Notepad"
-        return action
     if re.search(r"\bhotkey\b|\bpress\b", blob):
         return {"action": "hotkey", "value": "ctrl+s", "keys": "ctrl+s"}
     verb = _closed_verb(blob)
@@ -1544,12 +1635,22 @@ def explain_understanding(wf: TaughtWorkflow, step_id: str, re_ask_only: bool = 
     success = understanding_prior.get("success_check")
     success_source = understanding_prior.get("success_source")
     if not success:
-        for q in step.qa_history:
-            if q.get("kind") == "success_confirm" and (q.get("a") or "").strip().lower().startswith("yes"):
-                from success_signals import success_check_text
-                success = success_check_text(q.get("signal") or {})
-                success_source = "derived"
-                break
+        for q in reversed(step.qa_history):
+            if q.get("kind") == "success_confirm" and (q.get("a") or "").strip():
+                ans = (q.get("a") or "").strip()
+                low = ans.lower()
+                if low.startswith("yes"):
+                    from success_signals import success_check_text
+
+                    success = success_check_text(q.get("signal") or {})
+                    success_source = "derived"
+                    break
+                if not low.startswith("no"):
+                    user_text = _user_success_text(ans)
+                    if user_text:
+                        success = user_text
+                        success_source = "user"
+                        break
             if q.get("kind") == "success_fallback" and (q.get("a") or "").strip():
                 success = q["a"].strip()
                 success_source = "user"
@@ -1671,18 +1772,20 @@ def approve_understanding(wf: TaughtWorkflow, step_id: str) -> TaughtStep:
             raise TeachingError(
                 "vision does not match the tree target — answer the confirmation on the card first"
             )
+    method = (getattr(step, "method", "anchor") or "anchor").strip().lower()
     cc = int(getattr(step, "click_count", 1) or 1)
     filled = _filled_anchors(step)
-    if cc == 2:
-        if len(filled) < 2:
-            _ask_one_click_instead(step)
-            save_taught(wf)
-            raise TeachingError("second click not captured — did you mean one click?")
-        from chain_exec import chain_irreversible_error
+    if method != "prompt":
+        if cc == 2:
+            if len(filled) < 2:
+                _ask_one_click_instead(step)
+                save_taught(wf)
+                raise TeachingError("second click not captured — did you mean one click?")
+            from chain_exec import chain_irreversible_error
 
-        err = chain_irreversible_error(step)
-        if err:
-            raise TeachingError(err)
+            err = chain_irreversible_error(step)
+            if err:
+                raise TeachingError(err)
     if not step.understanding:
         raise TeachingError("no written understanding to approve")
     for k in _UNDERSTANDING_KEYS:
@@ -1840,6 +1943,27 @@ def check_chain_incomplete(wf: TaughtWorkflow, step_id: str) -> dict | None:
     return None
 
 
+def _produced_satisfies_success(step, wanted: str, observed: str) -> bool:
+    """Dynamic extract (e.g. a new email) is success even if the placeholder isn't in the value."""
+    demo = step.demo or {}
+    produced = demo.get("produced") or {}
+    method = (getattr(step, "method", "anchor") or "anchor").strip().lower()
+    params = list(step.produces or []) + list(step.parameters or [])
+    if not params:
+        params = re.findall(r"\{[A-Za-z_][\w]*\}", wanted or "")
+    if produced:
+        for p in params:
+            val = produced.get(p) or produced.get(str(p).strip("{}"))
+            if val:
+                return True
+    obs = (observed or "").strip()
+    if method == "prompt" and demo.get("ok") and obs:
+        if any("email" in str(p).lower() for p in params) or "email" in (wanted or ""):
+            return bool(re.search(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}", obs))
+        return True
+    return False
+
+
 def reflect_on_demo(wf: TaughtWorkflow, step_id: str) -> dict:
     step = get_step(wf, step_id)
     if not step.demo:
@@ -1856,7 +1980,10 @@ def reflect_on_demo(wf: TaughtWorkflow, step_id: str) -> dict:
     if wanted and observed and wanted not in obs_l and not any(
         tok in obs_l for tok in wanted.split() if len(tok) > 4
     ):
-        differences.append(f"observed {observed!r} does not match success check {wanted!r}")
+        if _produced_satisfies_success(step, wanted, observed):
+            pass
+        else:
+            differences.append(f"observed {observed!r} does not match success check {wanted!r}")
     matches = not differences
     reflection = {
         "what_i_did": (step.action or {}).get("action") or "unknown",

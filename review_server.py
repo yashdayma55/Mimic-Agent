@@ -495,12 +495,50 @@ class ReviewHandler(BaseHTTPRequestHandler):
 
         if path == "/api/teach/float":
             data = self._read_json()
+            api_url = f"http://127.0.0.1:{PORT}"
+            if data.get("case_mode"):
+                try:
+                    result = ui_backend.teach_arm_case_float(
+                        data.get("name"), data.get("step_id"),
+                        click_count=data.get("click_count"),
+                        api_url=api_url,
+                    )
+                except Exception as e:
+                    result = {"ok": False, "error": str(e)}
+                st = 400 if not result.get("ok") else 200
+                status, body, ctype = _json_bytes(result, status=st)
+                self._send(status, body, ctype)
+                return
             status, body, ctype = _json_bytes(
                 ui_backend.teach_arm_show(
                     data.get("name"), data.get("step_id"),
                     click_count=data.get("click_count"),
+                    api_url=api_url,
+                    vision_mode=bool(data.get("vision_mode")),
+                    question=data.get("question") or "",
+                    case_id=data.get("case_id") or "",
                 )
             )
+            self._send(status, body, ctype)
+            return
+
+        if path in (
+            "/api/teach/float-case",
+            "/api/teach/float_bar",
+            "/api/teach/float-bar",
+        ):
+            data = self._read_json()
+            api_url = f"http://127.0.0.1:{PORT}"
+            try:
+                result = ui_backend.teach_arm_case_float(
+                    data.get("name"), data.get("step_id"),
+                    click_count=data.get("click_count"),
+                    api_url=api_url,
+                )
+            except Exception as e:
+                result = {"ok": False, "error": str(e)}
+            st = 400 if not result.get("ok") else 200
+            status, body, ctype = _json_bytes(result, status=st)
             self._send(status, body, ctype)
             return
 
@@ -565,7 +603,11 @@ class ReviewHandler(BaseHTTPRequestHandler):
         if path == "/api/teach/focus-target":
             data = self._read_json()
             status, body, ctype = _json_bytes(
-                ui_backend.teach_focus_target(data.get("name"), data.get("step_id"))
+                ui_backend.teach_focus_target(
+                    data.get("name"),
+                    data.get("step_id"),
+                    case_id=data.get("case_id"),
+                )
             )
             self._send(status, body, ctype)
             return
@@ -612,6 +654,182 @@ class ReviewHandler(BaseHTTPRequestHandler):
             try:
                 result = ui_backend.teach_case_capture_start(
                     data.get("name"), data.get("step_id"),
+                    click_count=int(data.get("click_count") or 1),
+                    situation=data.get("situation") or "",
+                )
+            except Exception as e:
+                result = {"ok": False, "error": str(e)}
+            st = 400 if not result.get("ok") else 200
+            status, body, ctype = _json_bytes(result, status=st)
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/case-grab-screen":
+            data = self._read_json()
+            try:
+                result = ui_backend.teach_case_grab_screen(
+                    data.get("name"), data.get("step_id"),
+                )
+            except Exception as e:
+                result = {"ok": False, "error": str(e)}
+            st = 400 if not result.get("ok") else 200
+            status, body, ctype = _json_bytes(result, status=st)
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/case-begin":
+            data = self._read_json()
+            try:
+                result = ui_backend.teach_case_begin(
+                    data.get("name"),
+                    data.get("step_id"),
+                    when_applies=data.get("when_applies") or data.get("situation") or "",
+                    what_to_do=data.get("what_to_do") or "",
+                    continue_prompt=data.get("continue_prompt") or "",
+                    click_count=int(data.get("click_count") or 1),
+                )
+            except Exception as e:
+                result = {"ok": False, "error": str(e)}
+            st = 400 if not result.get("ok") else 200
+            status, body, ctype = _json_bytes(result, status=st)
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/case-reteach":
+            data = self._read_json()
+            try:
+                result = ui_backend.teach_case_reteach(
+                    data.get("name"), data.get("step_id"), data.get("case_id"),
+                )
+            except Exception as e:
+                result = {"ok": False, "error": str(e)}
+            st = 400 if not result.get("ok") else 200
+            status, body, ctype = _json_bytes(result, status=st)
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/case-prompt-try":
+            data = self._read_json()
+            try:
+                result = ui_backend.teach_case_prompt_try(
+                    data.get("name"),
+                    data.get("step_id"),
+                    data.get("case_id"),
+                    data.get("instruction") or "",
+                )
+            except Exception as e:
+                result = {"ok": False, "error": str(e)}
+            st = 400 if not result.get("ok") else 200
+            status, body, ctype = _json_bytes(result, status=st)
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/case-draft-patch":
+            data = self._read_json()
+            try:
+                result = ui_backend.teach_case_draft_patch(
+                    data.get("name"), data.get("step_id"), data,
+                )
+            except Exception as e:
+                result = {"ok": False, "error": str(e)}
+            st = 400 if not result.get("ok") else 200
+            status, body, ctype = _json_bytes(result, status=st)
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/case-save-draft":
+            data = self._read_json()
+            try:
+                result = ui_backend.teach_case_save_draft(
+                    data.get("name"), data.get("step_id"),
+                )
+            except Exception as e:
+                result = {"ok": False, "error": str(e)}
+            st = 400 if not result.get("ok") else 200
+            status, body, ctype = _json_bytes(result, status=st)
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/case-patch":
+            data = self._read_json()
+            try:
+                result = ui_backend.teach_case_patch(
+                    data.get("name"), data.get("step_id"), data.get("case_id"), data,
+                )
+            except Exception as e:
+                result = {"ok": False, "error": str(e)}
+            st = 400 if not result.get("ok") else 200
+            status, body, ctype = _json_bytes(result, status=st)
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/case-approve":
+            data = self._read_json()
+            try:
+                result = ui_backend.teach_case_approve(
+                    data.get("name"), data.get("step_id"), data.get("case_id"),
+                )
+            except Exception as e:
+                result = {"ok": False, "error": str(e)}
+            st = 400 if not result.get("ok") else 200
+            status, body, ctype = _json_bytes(result, status=st)
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/case-demo":
+            data = self._read_json()
+            try:
+                cont = data.get("continue_parent")
+                if cont is not None:
+                    cont = bool(cont)
+                result = ui_backend.teach_case_demo(
+                    data.get("name"),
+                    data.get("step_id"),
+                    data.get("case_id"),
+                    continue_parent=cont,
+                )
+            except Exception as e:
+                result = {"ok": False, "error": str(e)}
+            st = 400 if not result.get("ok") else 200
+            status, body, ctype = _json_bytes(result, status=st)
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/case-fix-access-email":
+            data = self._read_json()
+            try:
+                result = ui_backend.teach_case_fix_access_email(
+                    data.get("name"),
+                    data.get("step_id"),
+                    data.get("case_id"),
+                    instruction=data.get("instruction") or "",
+                )
+            except Exception as e:
+                result = {"ok": False, "error": str(e)}
+            st = 400 if not result.get("ok") else 200
+            status, body, ctype = _json_bytes(result, status=st)
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/case-finish":
+            data = self._read_json()
+            try:
+                result = ui_backend.teach_case_finish(
+                    data.get("name"), data.get("step_id"),
+                    click_count=data.get("click_count"),
+                )
+            except Exception as e:
+                result = {"ok": False, "error": str(e)}
+            st = 400 if not result.get("ok") else 200
+            status, body, ctype = _json_bytes(result, status=st)
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/case-substep":
+            data = self._read_json()
+            try:
+                result = ui_backend.teach_case_sub_description(
+                    data.get("name"), data.get("step_id"), data.get("description") or "",
                 )
             except Exception as e:
                 result = {"ok": False, "error": str(e)}
@@ -643,6 +861,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
                     data.get("name"),
                     data.get("step_id"),
                     data.get("description") or "",
+                    click_count=int(data.get("click_count") or 1),
                 )
             except Exception as e:
                 result = {"ok": False, "error": str(e)}
@@ -656,6 +875,115 @@ class ReviewHandler(BaseHTTPRequestHandler):
             try:
                 result = ui_backend.teach_case_authoring_cancel(
                     data.get("name"), data.get("step_id"),
+                )
+            except Exception as e:
+                result = {"ok": False, "error": str(e)}
+            st = 400 if not result.get("ok") else 200
+            status, body, ctype = _json_bytes(result, status=st)
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/case-halt-dismiss":
+            data = self._read_json()
+            try:
+                result = ui_backend.teach_case_halt_dismiss(
+                    data.get("name"), data.get("step_id"),
+                )
+            except Exception as e:
+                result = {"ok": False, "error": str(e)}
+            st = 400 if not result.get("ok") else 200
+            status, body, ctype = _json_bytes(result, status=st)
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/vision-ask":
+            data = self._read_json()
+            try:
+                result = ui_backend.teach_vision_ask(
+                    data.get("name"), data.get("step_id"), data.get("question") or "",
+                )
+            except Exception as e:
+                result = {"ok": False, "error": str(e)}
+            st = 400 if not result.get("ok") else 200
+            status, body, ctype = _json_bytes(result, status=st)
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/vision-reply":
+            data = self._read_json()
+            try:
+                result = ui_backend.teach_vision_reply(
+                    data.get("name"),
+                    data.get("step_id"),
+                    data.get("reply") or data.get("question") or "",
+                    regrab=bool(data.get("regrab")),
+                )
+            except Exception as e:
+                result = {"ok": False, "error": str(e)}
+            st = 400 if not result.get("ok") else 200
+            status, body, ctype = _json_bytes(result, status=st)
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/vision-as-step":
+            data = self._read_json()
+            try:
+                result = ui_backend.teach_vision_as_step(
+                    data.get("name"),
+                    data.get("step_id"),
+                    data.get("remember_prompt") or data.get("remember") or "",
+                )
+            except Exception as e:
+                result = {"ok": False, "error": str(e)}
+            st = 400 if not result.get("ok") else 200
+            status, body, ctype = _json_bytes(result, status=st)
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/vision-remove":
+            data = self._read_json()
+            try:
+                result = ui_backend.teach_vision_remove(
+                    data.get("name"), data.get("step_id"), int(data.get("index", 0)),
+                )
+            except Exception as e:
+                result = {"ok": False, "error": str(e)}
+            st = 400 if not result.get("ok") else 200
+            status, body, ctype = _json_bytes(result, status=st)
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/prompt-try":
+            data = self._read_json()
+            try:
+                result = ui_backend.teach_prompt_try(
+                    data.get("name"), data.get("step_id"), data.get("instruction") or "",
+                )
+            except Exception as e:
+                result = {"ok": False, "error": str(e)}
+            st = 400 if not result.get("ok") else 200
+            status, body, ctype = _json_bytes(result, status=st)
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/prompt-save":
+            data = self._read_json()
+            try:
+                result = ui_backend.teach_prompt_save(
+                    data.get("name"), data.get("step_id"), data.get("instruction") or "",
+                )
+            except Exception as e:
+                result = {"ok": False, "error": str(e)}
+            st = 400 if not result.get("ok") else 200
+            status, body, ctype = _json_bytes(result, status=st)
+            self._send(status, body, ctype)
+            return
+
+        if path == "/api/teach/set-method":
+            data = self._read_json()
+            try:
+                result = ui_backend.teach_set_method(
+                    data.get("name"), data.get("step_id"), data.get("method") or "anchor",
                 )
             except Exception as e:
                 result = {"ok": False, "error": str(e)}

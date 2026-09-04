@@ -9,6 +9,9 @@ _active = None
 _lock = threading.Lock()
 CAPTURE_PATH = "/api/teach/capture"
 FOCUS_PATH = "/api/teach/focus-target"
+CASE_GRAB_PATH = "/api/teach/case-grab-screen"
+CASE_FINISH_PATH = "/api/teach/case-finish"
+VISION_ASK_PATH = "/api/teach/vision-ask"
 
 
 def cursor_point() -> tuple[int, int]:
@@ -51,17 +54,23 @@ class FloatingTeacher:
     def __init__(self, api_url: str = "http://127.0.0.1:8765", workflow: str = "",
                  step_id: str = "", click_count: int = 1, capture_fn=None,
                  rehearse_fn=None, observe_fn=None, countdown: float = 0,
-                 mode: str = "show", watch_seconds: float = 15):
+                 mode: str = "show", watch_seconds: float = 15,
+                 case_phase: str | None = None, case_label: str = "",
+                 vision_question: str = "", case_id: str = ""):
         self.api_url = api_url.rstrip("/")
         self.workflow = workflow
         self.step_id = step_id
         self.click_count = int(click_count or 1)
-        self.mode = "watch" if mode == "watch" else "show"
+        self.mode = "vision" if mode == "vision" else ("watch" if mode == "watch" else "show")
         self.watch_seconds = float(watch_seconds or 15)
         self.capture_fn = capture_fn
         self.rehearse_fn = rehearse_fn
         self.observe_fn = observe_fn
         self.countdown = float(countdown or 0)
+        self.case_phase = case_phase
+        self.case_label = case_label or ""
+        self.vision_question = vision_question or ""
+        self.case_id = case_id or ""
         self.calls: list = []
         self.last_outcome = ""
         self._root = None
@@ -71,35 +80,72 @@ class FloatingTeacher:
         self._secs = None
         self._run_btn = None
         self._focus_btn = None
+        self._finish_btn = None
+        self._clicks = None
         self.topmost = False
         self._drag_from = None
 
+    def set_case_authoring(
+        self,
+        phase: str | None,
+        case_label: str = "",
+        click_count: int | None = None,
+    ) -> None:
+        self.case_phase = phase
+        self.case_label = case_label or self.case_label
+        if click_count is not None:
+            self.click_count = int(click_count or 1)
+        self._refresh_labels()
+
     def set_target(self, workflow: str, step_id: str, click_count: int = 1,
-                   mode: str | None = None, watch_seconds: float | None = None) -> None:
+                   mode: str | None = None, watch_seconds: float | None = None,
+                   case_phase: str | None = None, case_label: str | None = None,
+                   vision_question: str | None = None, case_id: str | None = None) -> None:
         self.workflow = workflow
         self.step_id = step_id
         self.click_count = int(click_count or 1)
         if mode is not None:
-            self.mode = "watch" if mode == "watch" else "show"
+            self.mode = "vision" if mode == "vision" else ("watch" if mode == "watch" else "show")
         if watch_seconds is not None:
             self.watch_seconds = float(watch_seconds)
+        if case_phase is not None:
+            self.case_phase = case_phase
+        if case_label is not None:
+            self.case_label = case_label
+        if vision_question is not None:
+            self.vision_question = vision_question
+        if case_id is not None:
+            self.case_id = case_id or ""
         self._refresh_labels()
 
     def _refresh_labels(self) -> None:
         if self._step_lbl is not None:
             try:
-                self._step_lbl.config(text=f"step {self.step_id or '-'}")
+                if self.case_phase:
+                    lbl = self.case_label or "Case"
+                    self._step_lbl.config(text=lbl)
+                else:
+                    self._step_lbl.config(text=f"step {self.step_id or '-'}")
             except Exception:
                 pass
         if self._mode_btn is not None:
             try:
-                other = "Watch me" if self.mode == "show" else "Show me"
-                self._mode_btn.config(text=f"⇄ {other}")
+                if self.case_phase == "awaiting_capture":
+                    self._mode_btn.config(text="situation")
+                elif self.mode == "vision":
+                    self._mode_btn.config(text="ask vision")
+                else:
+                    other = "Watch me" if self.mode == "show" else "Show me"
+                    self._mode_btn.config(text=f"⇄ {other}")
             except Exception:
                 pass
         if self._run_btn is not None:
             try:
-                if self.mode == "watch":
+                if self.case_phase == "awaiting_capture":
+                    self._run_btn.config(text="Grab screen")
+                elif self.mode == "vision":
+                    self._run_btn.config(text="Ask vision")
+                elif self.mode == "watch":
                     self._run_btn.config(text="Watch me")
                 else:
                     txt = "Show me (2)" if self.click_count == 2 else "Show me"
@@ -111,18 +157,56 @@ class FloatingTeacher:
                 self._focus_btn.config(text="Focus here")
             except Exception:
                 pass
+        if self._finish_btn is not None:
+            try:
+                show_finish = self.case_phase == "needs_resolution"
+                if show_finish:
+                    self._finish_btn.pack(fill="x", padx=8, pady=(2, 4))
+                else:
+                    self._finish_btn.pack_forget()
+            except Exception:
+                pass
+        if self._clicks is not None:
+            try:
+                if self.case_phase:
+                    self._clicks.pack(pady=2)
+                    self._clicks.delete(0, "end")
+                    self._clicks.insert(0, str(int(self.click_count or 1)))
+                else:
+                    self._clicks.pack_forget()
+            except Exception:
+                pass
         if self._status is not None and not self.last_outcome:
             try:
-                hint = "show" if self.mode == "show" else "watch"
-                if self.mode == "show" and self.click_count == 2:
-                    hint += " · 2 clicks"
+                if self.case_phase == "awaiting_capture":
+                    hint = "set screen, then grab"
+                elif self.case_phase == "needs_resolution":
+                    hint = "teach resolution"
+                    if self.click_count == 2:
+                        hint += " · 2 clicks"
+                elif self.mode == "vision":
+                    hint = "Focus here, then Ask vision"
+                else:
+                    hint = "show" if self.mode == "show" else "watch"
+                    if self.mode == "show" and self.click_count == 2:
+                        hint += " · 2 clicks"
                 self._status.config(text=hint)
             except Exception:
                 pass
 
     def toggle_mode(self) -> None:
+        if self.case_phase == "awaiting_capture" or self.mode == "vision":
+            return
         self.mode = "watch" if self.mode == "show" else "show"
         self._refresh_labels()
+
+    def _current_click_count(self) -> int:
+        if self._clicks is not None:
+            try:
+                return max(1, min(2, int(self._clicks.get() or self.click_count or 1)))
+            except Exception:
+                pass
+        return int(self.click_count or 1)
 
     def _post(self, path: str, body: dict) -> dict | None:
         self.calls.append(path)
@@ -156,10 +240,19 @@ class FloatingTeacher:
         if not out:
             self.last_outcome = "error"
         else:
-            lc = out.get("last_capture") or {}
-            self.last_outcome = lc.get("message") or out.get("capture_message") or out.get("outcome") or ""
-            if not self.last_outcome and out.get("ok"):
-                self.last_outcome = "saved"
+            done = out.get("case_authoring_complete") or {}
+            if done.get("case"):
+                self.last_outcome = f"saved {done['case'].get('id', 'case')}"
+            elif out.get("case"):
+                self.last_outcome = f"saved {out['case'].get('id', 'case')}"
+            else:
+                lc = out.get("last_capture") or {}
+                self.last_outcome = (
+                    lc.get("message") or out.get("capture_message")
+                    or out.get("message") or out.get("outcome") or ""
+                )
+                if not self.last_outcome and out.get("ok"):
+                    self.last_outcome = "saved"
         if self._status is not None:
             try:
                 self._status.config(text=self.last_outcome or "done")
@@ -178,22 +271,30 @@ class FloatingTeacher:
                 pass
 
     def on_run(self) -> None:
+        if self.case_phase == "awaiting_capture":
+            self.on_grab_screen()
+            return
+        if self.mode == "vision":
+            self.on_ask_vision()
+            return
         if self._root is not None:
             try:
                 self._root.withdraw()
                 self._root.update()
             except Exception:
                 pass
+        cc = self._current_click_count()
+        self.click_count = cc
         body = build_capture_body(
             self.workflow,
             self.step_id,
             mode=self.mode,
-            click_count=self.click_count,
+            click_count=cc,
             countdown=self.countdown or 1.6,
             watch_seconds=float(self._secs.get()) if self._secs is not None else self.watch_seconds,
         )
-        body["click_count"] = self.click_count
-        if self.mode == "show" and self.click_count == 1:
+        body["click_count"] = cc
+        if self.mode == "show" and cc == 1:
             if self.countdown:
                 time.sleep(self.countdown)
             else:
@@ -215,6 +316,68 @@ class FloatingTeacher:
             except Exception:
                 pass
         self._apply_outcome(out)
+        if self.case_phase == "needs_resolution" and out and out.get("case_authoring_complete"):
+            self.case_phase = None
+            self.case_label = ""
+            self._refresh_labels()
+
+    def on_grab_screen(self) -> None:
+        if self._root is not None:
+            try:
+                self._root.withdraw()
+                self._root.update()
+            except Exception:
+                pass
+        for left in (3, 2, 1):
+            if self._status is not None:
+                try:
+                    self._status.config(text=f"grab in {left}…")
+                    if self._root is not None:
+                        self._root.update()
+                except Exception:
+                    pass
+            time.sleep(1)
+        if self._status is not None:
+            try:
+                self._status.config(text="grabbing…")
+                if self._root is not None:
+                    self._root.update()
+            except Exception:
+                pass
+        out = self._post(
+            CASE_GRAB_PATH,
+            {"name": self.workflow, "step_id": self.step_id},
+        )
+        if self._root is not None:
+            try:
+                self._root.deiconify()
+                self._root.attributes("-topmost", True)
+            except Exception:
+                pass
+        if out and out.get("needs_resolution"):
+            self.case_phase = "needs_resolution"
+            self.case_label = out.get("case_label") or self.case_label
+            cc = out.get("click_count")
+            if cc is not None:
+                self.click_count = int(cc)
+        self._apply_outcome(out)
+        self._refresh_labels()
+
+    def on_finish_case(self) -> None:
+        cc = self._current_click_count()
+        out = self._post(
+            CASE_FINISH_PATH,
+            {
+                "name": self.workflow,
+                "step_id": self.step_id,
+                "click_count": cc,
+            },
+        )
+        self._apply_outcome(out)
+        if out and out.get("case"):
+            self.case_phase = None
+            self.case_label = ""
+            self._refresh_labels()
 
     def on_show(self) -> None:
         """Backward-compatible alias."""
@@ -237,13 +400,64 @@ class FloatingTeacher:
                     self._root.update()
             except Exception:
                 pass
-        out = self._post(FOCUS_PATH, {"name": self.workflow, "step_id": self.step_id})
+        body = {"name": self.workflow, "step_id": self.step_id}
+        if self.case_id:
+            body["case_id"] = self.case_id
+        out = self._post(FOCUS_PATH, body)
         if self._root is not None:
             try:
                 self._root.attributes("-topmost", True)
             except Exception:
                 pass
         self._apply_focus_result(out)
+        if self.mode == "vision" and (self.vision_question or "").strip():
+            self.on_ask_vision()
+
+    def on_ask_vision(self) -> None:
+        q = (self.vision_question or "").strip()
+        if not q:
+            self.last_outcome = "type a question on the step card first"
+            if self._status is not None:
+                try:
+                    self._status.config(text=self.last_outcome)
+                except Exception:
+                    pass
+            return
+        if self._root is not None:
+            try:
+                self._root.withdraw()
+                self._root.update()
+            except Exception:
+                pass
+        self._post(FOCUS_PATH, {"name": self.workflow, "step_id": self.step_id})
+        time.sleep(0.2)
+        if self._status is not None:
+            try:
+                self._status.config(text="asking vision…")
+                if self._root is not None:
+                    self._root.update()
+            except Exception:
+                pass
+        out = self._post(
+            VISION_ASK_PATH,
+            {"name": self.workflow, "step_id": self.step_id, "question": q},
+        )
+        if self._root is not None:
+            try:
+                self._root.deiconify()
+                self._root.attributes("-topmost", True)
+            except Exception:
+                pass
+        if out and out.get("ok"):
+            ans = ((out.get("entry") or {}).get("a") or "answered")[:80]
+            self.last_outcome = ans
+        else:
+            self.last_outcome = (out or {}).get("error") or "vision ask failed"
+        if self._status is not None:
+            try:
+                self._status.config(text=self.last_outcome)
+            except Exception:
+                pass
 
     def _drag_start(self, event) -> None:
         self._drag_from = (int(event.x_root), int(event.y_root))
@@ -281,7 +495,7 @@ class FloatingTeacher:
         root.overrideredirect(True)
         root.attributes("-topmost", True)
         self.topmost = bool(root.attributes("-topmost"))
-        root.geometry("120x300+8+160")
+        root.geometry("128x400+8+120")
         root.configure(bg="#141A22")
         root.bind("<ButtonPress-1>", self._drag_start)
         root.bind("<B1-Motion>", self._drag_move)
@@ -316,6 +530,19 @@ class FloatingTeacher:
             relief="flat", font=("Segoe UI", 8, "bold"), height=1,
         )
         self._focus_btn.pack(fill="x", padx=8, pady=(2, 4))
+        tk.Label(root, text="clicks", fg="#7C8894", bg="#141A22", font=("Segoe UI", 7)).pack()
+        self._clicks = tk.Spinbox(
+            root, from_=1, to=2, increment=1, width=6,
+            font=("Segoe UI", 9), justify="center",
+        )
+        self._clicks.delete(0, "end")
+        self._clicks.insert(0, str(int(self.click_count or 1)))
+        self._clicks.pack(pady=2)
+        self._finish_btn = tk.Button(
+            root, text="Finish case", command=self.on_finish_case,
+            bg="#5A3D12", fg="#fff", activebackground="#6E4B18", activeforeground="#fff",
+            relief="flat", font=("Segoe UI", 8, "bold"), height=1,
+        )
         tk.Label(root, text="watch (sec)", fg="#7C8894", bg="#141A22", font=("Segoe UI", 7)).pack()
         self._secs = tk.Spinbox(
             root, from_=5, to=60, increment=5, width=6,
@@ -340,21 +567,37 @@ class FloatingTeacher:
 
 
 def arm_show(workflow: str, step_id: str, api_url: str = "http://127.0.0.1:8765",
-             click_count: int = 1, mode: str = "show", watch_seconds: float = 15) -> dict:
+             click_count: int = 1, mode: str = "show", watch_seconds: float = 15,
+             case_phase: str | None = None, case_label: str = "",
+             vision_question: str = "", case_id: str = "") -> dict:
     """Put the left-edge capture bar on screen. One instance at a time."""
     global _active
     cc = int(click_count or 1)
-    m = "watch" if mode == "watch" else "show"
+    if mode == "vision":
+        m = "vision"
+    elif mode == "watch":
+        m = "watch"
+    else:
+        m = "show"
     with _lock:
         if _active is not None:
             try:
-                _active.set_target(workflow, step_id, click_count=cc, mode=m, watch_seconds=watch_seconds)
-                return {"ok": True, "ready": True, "click_count": cc, "mode": _active.mode}
+                _active.set_target(
+                    workflow, step_id, click_count=cc, mode=m, watch_seconds=watch_seconds,
+                    case_phase=case_phase, case_label=case_label,
+                    vision_question=vision_question, case_id=case_id,
+                )
+                return {
+                    "ok": True, "ready": True, "click_count": cc, "mode": _active.mode,
+                    "case_phase": _active.case_phase,
+                }
             except Exception:
                 _active = None
         widget = FloatingTeacher(
             api_url=api_url, workflow=workflow, step_id=step_id,
             click_count=cc, countdown=1.6, mode=m, watch_seconds=watch_seconds,
+            case_phase=case_phase, case_label=case_label,
+            vision_question=vision_question, case_id=case_id,
         )
         _active = widget
 
@@ -365,4 +608,22 @@ def arm_show(workflow: str, step_id: str, api_url: str = "http://127.0.0.1:8765"
             pass
 
     threading.Thread(target=_run, daemon=True).start()
-    return {"ok": True, "ready": True, "click_count": cc, "mode": m}
+    return {
+        "ok": True, "ready": True, "click_count": cc, "mode": m,
+        "case_phase": case_phase,
+    }
+
+
+def arm_case_authoring(
+    workflow: str,
+    step_id: str,
+    *,
+    phase: str,
+    case_label: str,
+    click_count: int = 1,
+    api_url: str = "http://127.0.0.1:8765",
+) -> dict:
+    return arm_show(
+        workflow, step_id, api_url=api_url, click_count=click_count,
+        case_phase=phase, case_label=case_label,
+    )

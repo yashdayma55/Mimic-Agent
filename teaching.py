@@ -37,6 +37,7 @@ class StepCase:
     halted_at_step: str | None = None
     times_matched: int = 0
     last_matched: str | None = None
+    sub_step: dict | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -76,6 +77,10 @@ class TaughtStep:
     expected_start_frame: str | None = None
     cases: list = field(default_factory=list)
     case_halt: dict | None = None
+    case_authoring: dict | None = None
+    vision_chat: list = field(default_factory=list)
+    method: str = "anchor"
+    prompt_instruction: str = ""
 
     def to_dict(self) -> dict:
         sync_step_anchors(self)

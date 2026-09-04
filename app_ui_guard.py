@@ -9,8 +9,7 @@ _OWN_WINDOW_PATTERNS = (
     r"mimic\s*agent",
     r"mimicagent",
     r"127\.0\.0\.1",
-    r"localhost:8765",
-    r"localhost:\s*8765",
+    r"localhost:\d+",
     r"^show me$",
     r"review\s*ui",
 )

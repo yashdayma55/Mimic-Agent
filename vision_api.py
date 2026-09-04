@@ -209,6 +209,22 @@ def _ask_with_prompt(image_bytes, api_key, prompt: str, provider: str) -> str:
     raise ValueError(f"unsupported provider {provider}")
 
 
+def ask_vision_freeform(image_bytes, api_key, question: str, provider=None) -> str:
+    """Ask a free-form question about a screenshot; returns plain text (no OS input)."""
+    provider = provider or detect_provider(api_key)
+    if provider not in _ADAPTERS:
+        return "unknown provider for this key"
+    prompt = (
+        (question or "").strip()
+        + "\n\nAnswer in plain English based only on what you see in the screenshot. "
+        "Be specific about UI elements, text, and their locations."
+    )
+    try:
+        return (_ask_with_prompt(image_bytes, api_key, prompt, provider) or "").strip()
+    except Exception as e:
+        return f"vision error: {e}"
+
+
 if __name__ == "__main__":
     # quick offline check: detection only (no real call)
     for test_key in ["sk-ant-abc123", "sk-proj-abc123", "AIzaSyAbc123", "weird-key"]:
